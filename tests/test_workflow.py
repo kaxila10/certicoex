@@ -130,10 +130,11 @@ class Workflow(unittest.TestCase):
             result=response.json();self.assertIsNotNone(result['pdf'], result)
             pdf=self.client.get(result['pdf']);self.assertEqual(pdf.status_code,200)
             reader=PdfReader(BytesIO(pdf.content))
-            self.assertEqual(len(reader.pages),1 if preview else 2)
+            self.assertEqual(len(reader.pages),2)
+            self.assertEqual(result['count'],2)
             text='\n'.join(p.extract_text() for p in reader.pages)
             self.assertIn('Ana García López',text)
-            self.assertEqual('Luis Pérez Martín' in text,not preview)
+            self.assertIn('Luis Pérez Martín',text)
             for page in reader.pages:
                 self.assertRegex(page.extract_text(),r'1\.\s+Tema de prueba')
 

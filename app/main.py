@@ -22,6 +22,7 @@ from .access import authorized, configured
 from .defaults import seed_templates
 from .storage import open_store, StorageUnavailable
 from .validation import review_students
+from .naming import document_name, disposition
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = Path(os.environ.get('CERTICOEX_DATA', ROOT / '.local/data'))
@@ -412,11 +413,13 @@ def generate(payload: Batch):
     folder.mkdir()
     d = payload.course_date
     common = {'EMPRESA': payload.company, 'CIF': payload.cif, 'HORAS': f'{payload.hours:g}', 'FECHA': f'{d.day} de {MONTHS[d.month-1]} de {d.year}', 'TECNICO': current['name']}
-    students = [s.model_dump() for s in (payload.students[:1] if payload.preview else payload.students)]
+    students = [s.model_dump() for s in payload.students]
     output = folder / 'certificados.docx'
     db=open_store(DATA)
+    meta=db.get('template',payload.template_id,{})
+    filename=document_name(meta.get('name','Curso'),payload.company,d)
     render_batch(template, students, common, db.asset('signature'), output)
-    result = {'word': f'/api/files/{key}/docx', 'count': len(students), 'pdf': None, 'pages': None}
+    result = {'word': f'/api/files/{key}/docx', 'count': len(students), 'pdf': None, 'pages': None, 'filename':filename}
     try:
         _, pages = convert_pdf(output, folder)
         result.update(pdf=f'/api/files/{key}/pdf', pages=pages)
@@ -428,9 +431,8 @@ def generate(payload: Batch):
         path=folder/('certificados.'+kind)
         if path.exists(): assets['jobs/'+key+'/'+kind]=path.read_bytes()
     if payload.preview:
-        db.bundle('preview',key,{'id':key,'created':datetime.now(timezone.utc).timestamp()},assets)
+        db.bundle('preview',key,{'id':key,'created':datetime.now(timezone.utc).timestamp(),'filename':filename},assets)
     else:
-        meta=db.get('template',payload.template_id,{})
         record={'id':key,'created':datetime.now(timezone.utc).isoformat(),'course':meta.get('name','Curso'),
                 'technician':current['name'],'data':payload.model_dump(mode='json'),'files':result,
                 'issues':review_students(students)}
@@ -449,8 +451,13 @@ def download(key: str, kind: str, inline: bool = False):
     preview=db.get('preview',key)
     if preview and preview['created']<datetime.now(timezone.utc).timestamp()-86400:
         raise HTTPException(404,'La vista previa ha caducado. Vuelve a generarla.')
+    record=db.get('history',key)
+    name=(preview or {}).get('filename') or (record or {}).get('files',{}).get('filename')
+    if not name and record:
+        name=document_name(record['course'],record['data']['company'],record['data']['course_date'])
+    name=name or 'certificados'
     if content is not None:
-        return Response(content,media_type='application/pdf' if kind=='pdf' else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',headers={'Content-Disposition':('inline' if inline else 'attachment')+'; filename="certificados.'+kind+'"'})
+        return Response(content,media_type='application/pdf' if kind=='pdf' else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',headers={'Content-Disposition':disposition(name,kind,inline)})
     path = DATA / 'jobs' / key / ('certificados.' + kind)
     if not path.exists() or path.stat().st_mtime < datetime.now(timezone.utc).timestamp() - 86400:
         raise HTTPException(404, 'Archivo caducado. Vuelve a generar los certificados.')

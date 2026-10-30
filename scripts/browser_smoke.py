@@ -89,7 +89,7 @@ with tempfile.TemporaryDirectory(prefix='certicoex-browser-') as folder:
             assert page.locator('#hours').input_value()=='6.5'
             page.locator('#excel-file').set_input_files(excel)
             page.locator('#apply-import').click();page.wait_for_function("() => document.querySelector('#student-count').textContent === '1'")
-            page.locator('#training-title').fill('Borrador de formación · prueba')
+            assert page.locator('#training-title').count()==0
             page.locator('#student-rows tr').first.locator('input').last.fill('')
             page.locator('#save-draft').click()
             page.wait_for_function('() => document.querySelector("#draft-status").textContent === "Borrador guardado"')
@@ -98,7 +98,7 @@ with tempfile.TemporaryDirectory(prefix='certicoex-browser-') as folder:
             assert page.locator('#hours').input_value()=='6.5'
             page.locator('#open-drafts').click()
             page.locator('#draft-list button').filter(has_text='Recuperar').click()
-            assert page.locator('#training-title').input_value()=='Borrador de formación · prueba'
+            assert page.locator('#training-title').count()==0
             assert page.locator('#student-rows tr').first.locator('input').last.input_value()==''
             page.locator('#student-rows tr').first.locator('input').last.fill('12345678Z')
             page.locator('#tab-paste').click()
@@ -110,6 +110,10 @@ with tempfile.TemporaryDirectory(prefix='certicoex-browser-') as folder:
             page.locator('#preview').click()
             page.wait_for_function("() => document.querySelector('#preview-dialog').open",timeout=60000)
             assert '/api/files/' in page.locator('#pdf-preview').get_attribute('src')
+            preview_url=page.locator('#pdf-preview').get_attribute('src')
+            preview_pdf=PdfReader(BytesIO(context.request.get('http://127.0.0.1:8001'+preview_url).body()))
+            assert len(preview_pdf.pages)==2
+            assert 'Luis Pérez Martín' in preview_pdf.pages[1].extract_text()
             page.locator('[data-close=preview-dialog]').click()
             page.locator('#saved-company').select_option('')
             page.locator('#company').fill('Empresa guardada automáticamente')
@@ -120,6 +124,7 @@ with tempfile.TemporaryDirectory(prefix='certicoex-browser-') as folder:
             assert page.locator('#saved-company option:checked').text_content()=='Empresa guardada automáticamente · B22222222'
             for kind in ('word','pdf'):
                 with page.expect_download() as result:page.locator('#download-'+kind).click()
+                assert result.value.suggested_filename=='Manipulado · curso configurado - Empresa guardada automáticamente - 30-10-2026.'+('docx' if kind=='word' else 'pdf')
                 result.value.save_as(artifacts/('ejemplo-certificados.'+('docx' if kind=='word' else 'pdf')))
             reader=PdfReader(artifacts/'ejemplo-certificados.pdf');assert len(reader.pages)==2
             assert 'Ana García López Corregida' in reader.pages[0].extract_text()

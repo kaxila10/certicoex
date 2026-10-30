@@ -1,6 +1,6 @@
 # Certicoex
 
-Aplicación personal para generar certificados PRL desde plantillas Word. Importa alumnos desde Excel `.xlsx`, pega listados o introdúcelos a mano, corrige los datos y obtén **un Word y un PDF con todo el lote**. Incluye perfil del técnico con firma en imagen y vista previa del primer alumno.
+Aplicación personal para generar certificados PRL desde plantillas Word. Importa alumnos desde Excel `.xlsx`, pega listados o introdúcelos a mano, corrige los datos y obtén **un Word y un PDF con todo el lote**. Incluye perfil del técnico con firma en imagen y vista previa de todos los alumnos juntos.
 
 Para usar la descarga de escritorio, consulta `LEEME-PRIMERO.txt`. Con Python 3.12+ y LibreOffice instalados, `INICIAR.bat` (Windows) o `bash INICIAR.command` (Mac/Linux) prepara las dependencias y abre la app en el navegador de ese ordenador. Los lanzadores de Windows/Mac no se han ejecutado en esos sistemas; la aplicación y sus documentos se han validado en Linux.
 
@@ -51,7 +51,7 @@ Perfil, firma, empresas, cursos, borradores, historial y documentos se guardan e
 
 El uso local puede funcionar sin contraseña, limitado a la interfaz local. El despliegue en Render exige una contraseña de al menos 16 caracteres y protege tanto la interfaz como las APIs y las descargas mediante HTTP Basic sobre HTTPS. No hay separación entre técnicos: el perfil sigue siendo único por instalación. Consulta [la guía de Render](docs/RENDER.md) para preparar una prueba con almacenamiento temporal. El uso compartido con perfiles privados es una fase posterior.
 
-LibreOffice conserva las propiedades del Word, secciones y cabeceras; la app independiza la numeración por alumno. Las fuentes disponibles pueden hacer variar la maquetación frente a Microsoft Word. La instalación cloud incluye Carlito como sustituta de Calibri. Revisa el primer certificado, especialmente con nombres/empresas largos o nuevas plantillas. No se garantiza una página por alumno para cualquier plantilla.
+LibreOffice conserva las propiedades del Word, secciones y cabeceras; la app independiza la numeración por alumno. Las fuentes disponibles pueden hacer variar la maquetación frente a Microsoft Word. La instalación cloud incluye Carlito como sustituta de Calibri. Revisa todos los certificados, especialmente con nombres/empresas largos o nuevas plantillas. No se garantiza una página por alumno para cualquier plantilla.
 
 ## Pruebas
 
@@ -78,3 +78,5 @@ El selector «Empresa guardada» recupera nombre y CIF. El botón «Guardar empr
 - «Recuperar para corregir» copia la formación al formulario y genera una versión nueva con el perfil actual. Los documentos originales se conservan íntegros.
 
 La persistencia PostgreSQL se prueba también con `.venv/bin/python scripts/test_database_persistence.py`, eliminando todo el disco local entre dos instancias de la app. La prueba no usa ninguna base de datos real del usuario.
+
+Los archivos descargados usan el nombre del curso, la empresa hasta la primera coma y la fecha de formación en formato DD-MM-AAAA, por ejemplo `Prevención agrícola - Hortícola del Sur - 30-10-2026.pdf`. Se conservan los acentos y se eliminan caracteres incompatibles con nombres de archivo. La vista previa usa el mismo lote completo y no crea entradas en el historial.

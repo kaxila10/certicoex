@@ -158,7 +158,7 @@ function payload(preview) {
   if (!profile.name || !profile.has_signature) { $('profile-dialog').showModal(); toast('Guarda tu nombre y firma antes de generar.'); return null; }
   if (!students.length) throw new Error('Añade al menos un alumno.');
   if (!validateStudents()) throw new Error('Corrige los datos incompletos o repetidos del listado.');
-  return {title:$('training-title').value, template_id:$('template').value, company:$('company').value.trim(), cif:$('cif').value.trim(), hours:Number($('hours').value), course_date:$('course-date').value, students, preview};
+  return {template_id:$('template').value, company:$('company').value.trim(), cif:$('cif').value.trim(), hours:Number($('hours').value), course_date:$('course-date').value, students, preview};
 }
 async function generate(preview) {
   if (busy) return;
@@ -174,7 +174,7 @@ async function generate(preview) {
     if (startedAt !== revision) { $('generation-status').textContent = 'Los datos cambiaron durante la generación. Vuelve a generar para usar los datos actuales.'; return; }
     if (preview && result.pdf) {
       $('pdf-preview').src = result.pdf + '?inline=true'; $('preview-word').href = result.word;
-      $('preview-dialog').showModal(); $('generation-status').textContent = 'Vista previa del primer alumno preparada.';
+      $('preview-dialog').showModal(); $('generation-status').textContent = 'Vista previa de todos los alumnos preparada.';
     } else {
       $('download-word').href = result.word; $('download-pdf').hidden = !result.pdf;
       if (result.pdf) $('download-pdf').href = result.pdf;
@@ -220,7 +220,7 @@ $('company').addEventListener('input', () => {
   $('company-save-status').textContent = '';
 });
 $('cif').addEventListener('input', () => { $('company-save-status').textContent = ''; });
-['company', 'cif', 'hours', 'course-date', 'template', 'training-title'].forEach(id => $(id).addEventListener('input', () => {dirty(); summary();}));
+['company', 'cif', 'hours', 'course-date', 'template'].forEach(id => $(id).addEventListener('input', () => {dirty(); summary();}));
 $('add-student').onclick = () => { students.push({name:'', dni:''}); dirty(); renderStudents(); $('student-rows').lastChild.querySelector('input').focus(); };
 $('clear-students').onclick = () => { if (confirm('¿Vaciar el listado de alumnos?')) { students = []; dirty(); renderStudents(); } };
 $('tab-excel').onclick = () => setTab(true); $('tab-paste').onclick = () => setTab(false);
@@ -252,12 +252,11 @@ $('course-settings-form').onsubmit = event => { event.preventDefault(); run(asyn
   dirty(); $('course-dialog').close(); toast('Curso y duración habitual guardados.');
 }); };
 function trainingData() {
-  return {title:$('training-title').value,template_id:$('template').value,company:$('company').value,cif:$('cif').value,hours:$('hours').value,course_date:$('course-date').value,students:students.map(s => ({...s}))};
+  return {template_id:$('template').value,company:$('company').value,cif:$('cif').value,hours:$('hours').value,course_date:$('course-date').value,students:students.map(s => ({...s}))};
 }
 function restoreTraining(data, id = null) {
   if ((students.length || $('company').value) && !confirm('¿Sustituir los datos del formulario por esta formación?')) return false;
   if (data.template_id && !templates.some(t => t.id === data.template_id)) { toast('La plantilla de esta formación no está disponible. Añádela antes de recuperar sus datos.'); return false; }
-  $('training-title').value = data.title || '';
   $('template').value = data.template_id || ''; $('company').value = data.company || ''; $('cif').value = data.cif || '';
   $('hours').value = data.hours ?? ''; $('course-date').value = data.course_date || '';
   $('saved-company').value = companies.find(c => cleanDni(c.cif) === cleanDni(data.cif || ''))?.id || '';
@@ -285,7 +284,7 @@ async function loadDrafts() {
   const records = await api('/api/drafts'); $('draft-list').replaceChildren();
   if (!records.length) $('draft-list').textContent = 'Todavía no tienes borradores.';
   records.forEach(record => {
-    const d = record.data, {card,actions} = trainingCard(d.title || d.company || 'Borrador sin título', `${d.course_date || 'Sin fecha'} · ${d.students.length} alumno(s) · Guardado ${new Date(record.updated).toLocaleString('es-ES')}`);
+    const d = record.data, {card,actions} = trainingCard(d.company || 'Borrador sin empresa', `${d.course_date || 'Sin fecha'} · ${d.students.length} alumno(s) · Guardado ${new Date(record.updated).toLocaleString('es-ES')}`);
     actions.append(action('Recuperar',async () => { if (restoreTraining(d,record.id)) $('drafts-dialog').close(); }),action('Eliminar',async () => {
       if (!confirm('¿Eliminar este borrador?')) return;
       await api(`/api/drafts/${record.id}`,{method:'DELETE'}); if (currentDraftId === record.id) currentDraftId = null; await loadDrafts();
@@ -300,7 +299,7 @@ async function loadHistory() {
   $('history-prev').disabled = historyOffset === 0; $('history-next').disabled = historyOffset+50 >= records.total;
   if (!records.items.length) $('history-list').textContent = 'No hay certificados que coincidan con la búsqueda.';
   records.items.forEach(record => {
-    const d = record.data, {card,actions} = trainingCard(`${d.title ? d.title+' · ' : ''}${d.company} · ${record.course}`, `${d.course_date} · ${d.students.length} alumno(s) · ${record.technician} · Emitido ${new Date(record.created).toLocaleString('es-ES')}`);
+    const d = record.data, {card,actions} = trainingCard(`${d.company} · ${record.course}`, `${d.course_date} · ${d.students.length} alumno(s) · ${record.technician} · Emitido ${new Date(record.created).toLocaleString('es-ES')}`);
     [['Word',record.files.word],['PDF',record.files.pdf]].forEach(([label,url]) => { if (url) { const link = document.createElement('a'); link.className = 'button secondary small'; link.textContent = 'Descargar '+label; link.href = url; actions.append(link); } });
     actions.append(action('Recuperar para corregir',async () => { if (restoreTraining(d)) { $('history-dialog').close(); toast('Datos recuperados. Generar creará una nueva versión y conservará la anterior.'); } }));
     $('history-list').append(card);

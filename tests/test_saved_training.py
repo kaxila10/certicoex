@@ -2,11 +2,13 @@ import hashlib
 import shutil
 import sqlite3
 import unittest
+from urllib.parse import unquote
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from app import main, storage
 from app.validation import identity_status
+from app.naming import document_name
 import test_workflow as fixtures
 
 
@@ -90,6 +92,28 @@ class SavedTraining(unittest.TestCase):
         key=result['word'].split('/')[-2]
         main.open_store(self.data).put('preview',key,{'id':key,'created':0})
         self.assertEqual(self.client.get(result['word']).status_code,404)
+
+    def test_download_names_use_course_company_prefix_and_course_date(self):
+        self.client.put('/api/templates/'+self.template+'/settings',json={'name':'Prevención agrícola','hours':8})
+        data=self.batch();data['company']='Hortícola del Sur, S. L., Grupo de prueba'
+        for preview in (True,False):
+            data['preview']=preview
+            result=self.emit(data)
+            self.assertEqual(result['filename'],'Prevención agrícola - Hortícola del Sur - 30-10-2026')
+            header=self.client.get(result['word']).headers['content-disposition']
+            self.assertEqual(unquote(header.split("filename*=UTF-8''")[1]),'Prevención agrícola - Hortícola del Sur - 30-10-2026.docx')
+            self.assertEqual(result['count'],2)
+        self.client.put('/api/templates/'+self.template+'/settings',json={'name':'Nombre cambiado','hours':4})
+        self.assertIn('Prevenci%C3%B3n',self.client.get(result['word']).headers['content-disposition'])
+        record=main.open_store(self.data).get('history',result['history_id'])
+        del record['files']['filename']
+        main.open_store(self.data).put('history',record['id'],record)
+        self.assertIn('Prevenci%C3%B3n',self.client.get(result['word']).headers['content-disposition'])
+
+    def test_filename_removes_unsafe_characters_and_limits_byte_length(self):
+        name=document_name('Curso / PRL: "básico"\r\n','Empresa\\Nombre, S.L.','2026-10-30')
+        self.assertEqual(name,'Curso PRL básico - Empresa Nombre - 30-10-2026')
+        self.assertLessEqual(len((document_name('á'*200,'ñ'*200,'2026-10-30')+'.docx').encode('utf8')),255)
 
     def test_identity_review_detects_letters_duplicates_and_missing_values(self):
         self.assertEqual(identity_status('12345678Z'),'valid')
