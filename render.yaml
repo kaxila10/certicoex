@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: certicoex
+    runtime: docker
+    plan: free
+    region: frankfurt
+    healthCheckPath: /api/health
+    envVars:
+      - key: CERTICOEX_AUTH_REQUIRED
+        value: "true"
+      - key: CERTICOEX_USERNAME
+        value: tecnico
+      - key: CERTICOEX_PASSWORD
+        generateValue: true
+      - key: CERTICOEX_EPHEMERAL
+        value: "true"

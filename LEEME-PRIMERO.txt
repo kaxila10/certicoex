@@ -1,0 +1,31 @@
+CERTICOEX - ACCESO DESDE TU ORDENADOR
+
+1. Extrae el ZIP completo en una carpeta, por ejemplo Documentos/Certicoex.
+   No ejecutes el lanzador dentro de la vista comprimida del ZIP.
+
+2. Instala Python 3.12 o posterior:
+   https://www.python.org/downloads/
+   En Windows, marca "Add Python to PATH" durante la instalación.
+
+3. Instala LibreOffice (incluye Writer) para generar PDF:
+   https://www.libreoffice.org/download/download-libreoffice/
+
+4. Abre INICIAR.bat si usas Windows.
+   En Mac: abre Terminal en esta carpeta y ejecuta: bash INICIAR.command
+   En Linux puedes usar la misma orden.
+   La primera vez se descargan las dependencias; necesita Internet.
+   Después la app se abre automáticamente en tu navegador.
+   Mantén abierta la ventana del lanzador mientras trabajas.
+
+5. Dentro de la app, pulsa "Mi perfil", escribe tu nombre, elige una imagen
+   PNG o JPG de tu firma y pulsa "Guardar perfil".
+
+Tu plantilla de manipulado, envasado y maquinaria ya está incluida.
+La firma y el nombre anteriores se han retirado de la copia preparada.
+El archivo Word original no se ha modificado.
+
+Los datos se guardan en este ordenador, en la carpeta .local/data del programa.
+No necesitas crear una cuenta. No es un servicio web publicado en Internet.
+Esta versión es para uso personal; no tiene cuentas de varios técnicos.
+No se han probado los lanzadores en un Windows o Mac reales: la aplicación
+y los documentos sí se han validado en Linux.

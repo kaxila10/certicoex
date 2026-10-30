@@ -1,0 +1,9 @@
+*
+!Dockerfile
+!requirements.txt
+!app/
+!app/*.py
+!static/
+!static/**
+!defaults/
+!defaults/*.docx
