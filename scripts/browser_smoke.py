@@ -53,6 +53,31 @@ with tempfile.TemporaryDirectory(prefix='certicoex-browser-') as folder:
             page.wait_for_function("() => !document.querySelector('#profile-dialog').open")
             page.locator('#company').fill('Empresa de prueba S. L.')
             page.locator('#cif').fill('B12345678');page.locator('#hours').fill('8');page.locator('#course-date').fill('2026-10-30')
+            assert page.locator('.step-strip').count()==0
+            page.locator('#save-company').click()
+            company_id=page.locator('#saved-company').input_value()
+            assert company_id
+            page.reload()
+            page.wait_for_function('() => document.querySelector("#template").options.length > 1')
+            page.locator('#saved-company').select_option(company_id)
+            assert page.locator('#company').input_value()=='Empresa de prueba S. L.'
+            assert page.locator('#cif').input_value()=='B12345678'
+            page.locator('#saved-company').select_option('')
+            assert page.locator('#cif').input_value()==''
+            page.locator('#company').fill('Segunda empresa de prueba')
+            page.locator('#cif').fill('B87654321')
+            page.locator('#save-company').click()
+            assert page.locator('#saved-company option').count()==3
+            page.locator('#saved-company').select_option(company_id)
+            assert page.locator('#cif').input_value()=='B12345678'
+            page.locator('#cif').fill('B12345679')
+            page.locator('#save-company').click()
+            page.reload()
+            page.wait_for_function('() => document.querySelector("#template").options.length > 1')
+            page.locator('#saved-company').select_option(company_id)
+            assert page.locator('#cif').input_value()=='B12345679'
+            assert page.locator('#saved-company option').count()==3
+            page.locator('#hours').fill('8');page.locator('#course-date').fill('2026-10-30')
             page.locator('#excel-file').set_input_files(excel)
             page.locator('#apply-import').click();page.wait_for_function("() => document.querySelector('#student-count').textContent === '1'")
             page.locator('#tab-paste').click()
@@ -65,8 +90,13 @@ with tempfile.TemporaryDirectory(prefix='certicoex-browser-') as folder:
             page.wait_for_function("() => document.querySelector('#preview-dialog').open",timeout=60000)
             assert '/api/files/' in page.locator('#pdf-preview').get_attribute('src')
             page.locator('[data-close=preview-dialog]').click()
+            page.locator('#saved-company').select_option('')
+            page.locator('#company').fill('Empresa guardada automáticamente')
+            page.locator('#cif').fill('B22222222')
             page.locator('#generate').click()
             page.wait_for_function("() => !document.querySelector('#downloads').hidden",timeout=60000)
+            assert page.locator('#saved-company option').count()==4
+            assert page.locator('#saved-company option:checked').text_content()=='Empresa guardada automáticamente · B22222222'
             for kind in ('word','pdf'):
                 with page.expect_download() as result:page.locator('#download-'+kind).click()
                 result.value.save_as(artifacts/('ejemplo-certificados.'+('docx' if kind=='word' else 'pdf')))
@@ -80,6 +110,6 @@ with tempfile.TemporaryDirectory(prefix='certicoex-browser-') as folder:
             page.screenshot(path=str(artifacts/'app-mobile.png'),full_page=True)
             assert not errors, errors
             browser.close()
-            print('PASS: perfil, firma, Excel, pegar lista, corregir/eliminar, vista previa, Word y PDF, móvil; sin errores JS.')
+            print('PASS: empresas/CIF guardados y recuperados tras recargar, corrección sin duplicados, selección de empresas, sin franja de pasos; perfil, firma, alumnos, Word/PDF y móvil sin errores JS.')
     finally:
         process.terminate();process.wait(timeout=10);log.close()

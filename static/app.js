@@ -1,6 +1,44 @@
 const $ = id => document.getElementById(id);
 let templates = [], profile = {}, students = [], imported = null, busy = false, revision = 0;
 let toastTimer;
+const COMPANY_KEY = 'certicoex.companies.v1';
+let companies = [];
+function readCompanies() {
+  const entries = JSON.parse(localStorage.getItem(COMPANY_KEY) || '[]');
+  if (!Array.isArray(entries) || entries.some(e => !e || typeof e.id !== 'string' || typeof e.name !== 'string' || typeof e.cif !== 'string')) {
+    throw new Error('La agenda guardada en este navegador no se puede leer.');
+  }
+  return entries;
+}
+function showCompanies(selected = '') {
+  $('saved-company').replaceChildren(new Option('Nueva empresa / introducir datos', ''));
+  companies.sort((a, b) => a.name.localeCompare(b.name, 'es')).forEach(company => {
+    $('saved-company').add(new Option(`${company.name} · ${company.cif}`, company.id));
+  });
+  $('saved-company').value = selected;
+}
+function saveCompany(notify = true) {
+  const name = $('company').value.trim(), cif = $('cif').value.trim();
+  if (!name || !cif || !$('company').reportValidity() || !$('cif').reportValidity()) {
+    if (notify) toast('Completa el nombre y el CIF de la empresa.');
+    return;
+  }
+  try {
+    const entries = readCompanies();
+    const normalizeCif = value => value.toUpperCase().replace(/[\s.\-]/g, '');
+    const existing = entries.find(e => normalizeCif(e.cif) === normalizeCif(cif)) || entries.find(e => e.id === $('saved-company').value);
+    const entry = {id: existing?.id || crypto.randomUUID(), name, cif};
+    const next = entries.filter(e => e.id !== entry.id);
+    next.push(entry);
+    localStorage.setItem(COMPANY_KEY, JSON.stringify(next));
+    companies = next; showCompanies(entry.id);
+    $('company-save-status').textContent = 'Empresa guardada en este navegador';
+    if (notify) toast('Empresa y CIF guardados.');
+  } catch {
+    $('company-save-status').textContent = 'No se ha podido guardar la empresa';
+    toast('El navegador no permite guardar la agenda. Puedes generar los certificados, pero esta empresa no quedará guardada.');
+  }
+}
 function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 6500); }
 async function api(url, options = {}) {
   const response = await fetch(url, options);
@@ -125,6 +163,7 @@ function payload(preview) {
 async function generate(preview) {
   if (busy) return;
   const data = payload(preview); if (!data) return;
+  if (!preview) saveCompany(false);
   busy = true; const startedAt = revision;
   ['preview', 'generate'].forEach(id => $(id).disabled = true);
   $('downloads').hidden = true;
@@ -161,6 +200,29 @@ $('template-form').onsubmit = event => { event.preventDefault(); run(async () =>
   $('template-dialog').close(); $('template-form').reset(); toast('Plantilla añadida.');
 }); };
 $('course-form').onsubmit = e => e.preventDefault();
+$('save-company').onclick = () => saveCompany();
+$('saved-company').onchange = () => {
+  const selected = companies.find(e => e.id === $('saved-company').value);
+  $('company').value = selected?.name || '';
+  $('cif').value = selected?.cif || '';
+  $('company-save-status').textContent = selected ? 'Datos de la empresa recuperados' : '';
+  dirty(); summary();
+};
+$('company').addEventListener('input', () => {
+  const selected = companies.find(e => e.id === $('saved-company').value);
+  if (selected && selected.name !== $('company').value) {
+    $('saved-company').value = '';
+    $('cif').value = '';
+  }
+  $('company-save-status').textContent = '';
+});
+$('cif').addEventListener('input', () => { $('company-save-status').textContent = ''; });
+window.addEventListener('storage', event => {
+  if (event.key === COMPANY_KEY || event.key === null) {
+    try { companies = readCompanies(); showCompanies($('saved-company').value); }
+    catch { toast('No se ha podido actualizar la agenda de empresas.'); }
+  }
+});
 ['company', 'cif', 'hours', 'course-date', 'template'].forEach(id => $(id).addEventListener('input', () => {dirty(); summary();}));
 $('add-student').onclick = () => { students.push({name:'', dni:''}); dirty(); renderStudents(); $('student-rows').lastChild.querySelector('input').focus(); };
 $('clear-students').onclick = () => { if (confirm('¿Vaciar el listado de alumnos?')) { students = []; dirty(); renderStudents(); } };
@@ -178,4 +240,5 @@ $('apply-import').onclick = () => run(async () => {
   students.push(...rows); imported = null; $('mapping-panel').hidden = true; $('paste-text').value = ''; dirty(); renderStudents(); toast(`${rows.length} alumnos añadidos. Revisa sus datos.`);
 });
 $('preview').onclick = () => run(() => generate(true)); $('generate').onclick = () => run(() => generate(false));
+run(async () => { companies = readCompanies(); showCompanies(); });
 run(async () => { const [p, , health] = await Promise.all([api('/api/profile'), loadTemplates(), api('/api/health')]); profile = p; updateProfile(); $('trial-notice').hidden = !health.storage_ephemeral; });

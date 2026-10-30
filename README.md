@@ -64,3 +64,7 @@ CERTICOEX_TEST_PDF=1 .venv/bin/python -m unittest discover -s tests -v
 La última orden incluye conversiones reales Word→PDF y requiere LibreOffice. Las pruebas cubren importación de 50 alumnos, marcadores fragmentados, formato y caracteres XML, perfil/firma, duplicados, validación, origen de solicitudes y disponibilidad del Word si falla el PDF. Usan datos ficticios en carpetas temporales.
 
 En una máquina con Playwright y Chromium instalados, `python3 scripts/browser_smoke.py` prueba el flujo completo en un navegador con un perfil temporal, sin modificar el perfil real. Requiere haber cargado al menos una plantilla en `.local/data/templates`. Las capturas y ejemplos generados se guardan en `.local/validation/` y contienen datos ficticios. El navegador automatizado es una herramienta de desarrollo opcional, no una dependencia de la app.
+
+## Agenda de empresas
+
+El selector «Empresa guardada» recupera nombre y CIF. El botón «Guardar empresa y CIF» conserva los datos sin generar documentos; también se guardan automáticamente al generar un lote válido. Se pueden corregir el CIF y guardar de nuevo. Los datos se guardan en el almacenamiento local del navegador (`certicoex.companies.v1`), fuera del almacenamiento temporal de Render. Persisten al recargar y reiniciar el servicio, pero no se comparten entre dispositivos/navegadores y se pierden al borrar los datos del sitio o cerrar una sesión de incógnito. No se guardan alumnos en esta agenda.
