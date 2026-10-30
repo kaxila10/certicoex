@@ -3,41 +3,29 @@ let templates = [], profile = {}, students = [], imported = null, busy = false, 
 let toastTimer;
 const COMPANY_KEY = 'certicoex.companies.v1';
 let companies = [];
-function readCompanies() {
-  const entries = JSON.parse(localStorage.getItem(COMPANY_KEY) || '[]');
-  if (!Array.isArray(entries) || entries.some(e => !e || typeof e.id !== 'string' || typeof e.name !== 'string' || typeof e.cif !== 'string')) {
-    throw new Error('La agenda guardada en este navegador no se puede leer.');
-  }
-  return entries;
-}
+let currentDraftId = null, historyOffset = 0;
 function showCompanies(selected = '') {
   $('saved-company').replaceChildren(new Option('Nueva empresa / introducir datos', ''));
-  companies.sort((a, b) => a.name.localeCompare(b.name, 'es')).forEach(company => {
-    $('saved-company').add(new Option(`${company.name} · ${company.cif}`, company.id));
-  });
+  companies.sort((a,b) => a.name.localeCompare(b.name,'es')).forEach(c => $('saved-company').add(new Option(`${c.name} · ${c.cif}`,c.id)));
   $('saved-company').value = selected;
 }
-function saveCompany(notify = true) {
-  const name = $('company').value.trim(), cif = $('cif').value.trim();
-  if (!name || !cif || !$('company').reportValidity() || !$('cif').reportValidity()) {
-    if (notify) toast('Completa el nombre y el CIF de la empresa.');
-    return;
-  }
+async function loadCompanies(selected = '') {
+  companies = await api('/api/companies'); showCompanies(selected);
+}
+async function migrateCompanies() {
   try {
-    const entries = readCompanies();
-    const normalizeCif = value => value.toUpperCase().replace(/[\s.\-]/g, '');
-    const existing = entries.find(e => normalizeCif(e.cif) === normalizeCif(cif)) || entries.find(e => e.id === $('saved-company').value);
-    const entry = {id: existing?.id || crypto.randomUUID(), name, cif};
-    const next = entries.filter(e => e.id !== entry.id);
-    next.push(entry);
-    localStorage.setItem(COMPANY_KEY, JSON.stringify(next));
-    companies = next; showCompanies(entry.id);
-    $('company-save-status').textContent = 'Empresa guardada en este navegador';
-    if (notify) toast('Empresa y CIF guardados.');
-  } catch {
-    $('company-save-status').textContent = 'No se ha podido guardar la empresa';
-    toast('El navegador no permite guardar la agenda. Puedes generar los certificados, pero esta empresa no quedará guardada.');
-  }
+    const old = JSON.parse(localStorage.getItem(COMPANY_KEY) || '[]');
+    if (Array.isArray(old) && old.length) await api('/api/companies/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(old)});
+  } catch { toast('La agenda anterior de este navegador no se pudo importar. Sus datos se conservan.'); }
+  await loadCompanies();
+}
+async function saveCompany(notify = true) {
+  if (!$('company').reportValidity() || !$('cif').reportValidity()) return;
+  const entry = await api('/api/companies',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:$('saved-company').value || null,name:$('company').value.trim(),cif:$('cif').value.trim()})});
+  await loadCompanies(entry.id);
+  try { localStorage.setItem(COMPANY_KEY,JSON.stringify(companies)); } catch {}
+  $('company-save-status').textContent = 'Empresa guardada en la app';
+  if (notify) toast('Empresa y CIF guardados.');
 }
 function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 6500); }
 async function api(url, options = {}) {
@@ -52,7 +40,7 @@ async function api(url, options = {}) {
   return data;
 }
 function run(task) { return task().catch(error => toast(error.message)); }
-function dirty() { revision++; $('downloads').hidden = true; $('generation-status').textContent = ''; }
+function dirty() { revision++; if (currentDraftId) $('draft-status').textContent = 'Cambios sin guardar'; $('downloads').hidden = true; $('generation-status').textContent = ''; }
 function summary() {
   $('summary-template').textContent = templates.find(t => t.id === $('template').value)?.name || 'Sin seleccionar';
   $('summary-company').textContent = $('company').value.trim() || 'Por completar';
@@ -74,13 +62,14 @@ async function loadTemplates(selected) {
   $('template').replaceChildren(new Option('Selecciona una plantilla', ''));
   templates.forEach(t => $('template').add(new Option(t.name, t.id)));
   $('template').value = templates.some(t => t.id === old) ? old : templates.length === 1 ? templates[0].id : '';
+  if (selected === undefined) $('hours').value = templates.find(t => t.id === $('template').value)?.hours ?? '';
   summary();
 }
 function cleanDni(value) { return value.toUpperCase().replace(/[\s.\-]/g, ''); }
 function validateStudents() {
   const counts = new Map();
   students.forEach(s => { const dni = cleanDni(s.dni); if (dni) counts.set(dni, (counts.get(dni) || 0) + 1); });
-  let missing = 0, duplicate = 0, unusual = 0;
+  let missing = 0, duplicate = 0, unusual = 0, wrongLetter = 0;
   [...$('student-rows').children].forEach((row, i) => {
     const s = students[i], inputs = row.querySelectorAll('input');
     const emptyName = !s.name.trim(), emptyDni = !s.dni.trim(), repeated = (counts.get(cleanDni(s.dni)) || 0) > 1;
@@ -88,13 +77,24 @@ function validateStudents() {
     inputs[0].setAttribute('aria-invalid', String(emptyName)); inputs[1].setAttribute('aria-invalid', String(emptyDni || repeated));
     if (emptyName || emptyDni) missing++;
     if (repeated) duplicate++;
-    if (!emptyDni && !/^(\d{8}|[XYZ]\d{7})[A-Z]$/.test(cleanDni(s.dni))) unusual++;
+    const dni = cleanDni(s.dni), standard = /^(\d{8}|[XYZ]\d{7})[A-Z]$/.test(dni);
+    let badLetter = false;
+    if (standard) {
+      const number = dni.slice(0,-1).replace(/^[XYZ]/,c => String('XYZ'.indexOf(c)));
+      badLetter = 'TRWAGMYFPDXBNJZSQVHLCKE'[Number(number)%23] !== dni.slice(-1);
+    }
+    inputs[1].classList.toggle('input-warning',!emptyDni && !repeated && (!standard || badLetter));
+    inputs[1].title = badLetter ? 'La letra de control del DNI/NIE no coincide.' : '';
+    if (!emptyDni && !standard) unusual++;
+    if (badLetter) wrongLetter++;
   });
   const messages = [];
   if (missing) messages.push(`${missing} fila(s) con datos incompletos.`);
   if (duplicate) messages.push(`${duplicate} fila(s) con DNI/NIE repetido.`);
-  if (unusual) messages.push(`${unusual} documento(s) con formato poco habitual: revísalos. No se comprueba la letra de control.`);
-  $('student-validation').textContent = messages.join(' ');
+  if (unusual) messages.push(`${unusual} documento(s) con formato poco habitual: revísalos. Comprueba que son los documentos correctos.`);
+  if (wrongLetter) messages.push(`${wrongLetter} documento(s) con letra de control incorrecta. Revísalos antes de generar.`);
+  $('student-validation').classList.toggle('review-ok', messages.length === 0);
+  $('student-validation').textContent = messages.join(' ') || (students.length ? 'Listado revisado: sin datos vacíos, duplicados ni errores de letra de DNI/NIE.' : '');
   return !missing && !duplicate;
 }
 function renderStudents() {
@@ -158,18 +158,19 @@ function payload(preview) {
   if (!profile.name || !profile.has_signature) { $('profile-dialog').showModal(); toast('Guarda tu nombre y firma antes de generar.'); return null; }
   if (!students.length) throw new Error('Añade al menos un alumno.');
   if (!validateStudents()) throw new Error('Corrige los datos incompletos o repetidos del listado.');
-  return {template_id:$('template').value, company:$('company').value.trim(), cif:$('cif').value.trim(), hours:Number($('hours').value), course_date:$('course-date').value, students, preview};
+  return {title:$('training-title').value, template_id:$('template').value, company:$('company').value.trim(), cif:$('cif').value.trim(), hours:Number($('hours').value), course_date:$('course-date').value, students, preview};
 }
 async function generate(preview) {
   if (busy) return;
   const data = payload(preview); if (!data) return;
-  if (!preview) saveCompany(false);
+
   busy = true; const startedAt = revision;
   ['preview', 'generate'].forEach(id => $(id).disabled = true);
   $('downloads').hidden = true;
   $('generation-status').textContent = preview ? 'Preparando la vista previa…' : `Generando ${students.length} certificados. El PDF puede tardar unos instantes…`;
   try {
     const result = await api('/api/generate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+    if (!preview) { await loadCompanies(); const entry = companies.find(c => cleanDni(c.cif) === cleanDni(data.cif)); if (entry) showCompanies(entry.id); try { localStorage.setItem(COMPANY_KEY,JSON.stringify(companies)); } catch {} }
     if (startedAt !== revision) { $('generation-status').textContent = 'Los datos cambiaron durante la generación. Vuelve a generar para usar los datos actuales.'; return; }
     if (preview && result.pdf) {
       $('pdf-preview').src = result.pdf + '?inline=true'; $('preview-word').href = result.word;
@@ -177,7 +178,7 @@ async function generate(preview) {
     } else {
       $('download-word').href = result.word; $('download-pdf').hidden = !result.pdf;
       if (result.pdf) $('download-pdf').href = result.pdf;
-      $('result-info').textContent = `${result.count} certificado(s)${result.pages ? ` · ${result.pages} página(s) en el PDF` : ''}. Descargas disponibles durante 24 horas.`;
+      $('result-info').textContent = `${result.count} certificado(s)${result.pages ? ` · ${result.pages} página(s) en el PDF` : ''}. ${preview ? 'Vista previa disponible durante 24 horas.' : 'Documentos conservados en el historial.'}`;
       $('downloads').querySelector('h3').textContent = preview ? 'Prueba en Word disponible' : 'Tu lote está listo';
       $('downloads').hidden = false;
       $('generation-status').textContent = result.warning || 'Documentos generados correctamente.';
@@ -196,11 +197,13 @@ $('profile-form').onsubmit = event => { event.preventDefault(); run(async () => 
 }); };
 $('template-form').onsubmit = event => { event.preventDefault(); run(async () => {
   const data = new FormData(); data.append('name', $('template-name').value); data.append('file', $('template-file').files[0]);
-  const result = await api('/api/templates', {method:'POST', body:data}); await loadTemplates(result.id); dirty();
+  const result = await api('/api/templates', {method:'POST', body:data});
+  if ($('template-hours').value) await api(`/api/templates/${result.id}/settings`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:result.name,hours:Number($('template-hours').value)})});
+  await loadTemplates(result.id); $('hours').value = templates.find(t => t.id === result.id)?.hours ?? ''; dirty();
   $('template-dialog').close(); $('template-form').reset(); toast('Plantilla añadida.');
 }); };
 $('course-form').onsubmit = e => e.preventDefault();
-$('save-company').onclick = () => saveCompany();
+$('save-company').onclick = () => run(() => saveCompany());
 $('saved-company').onchange = () => {
   const selected = companies.find(e => e.id === $('saved-company').value);
   $('company').value = selected?.name || '';
@@ -217,13 +220,7 @@ $('company').addEventListener('input', () => {
   $('company-save-status').textContent = '';
 });
 $('cif').addEventListener('input', () => { $('company-save-status').textContent = ''; });
-window.addEventListener('storage', event => {
-  if (event.key === COMPANY_KEY || event.key === null) {
-    try { companies = readCompanies(); showCompanies($('saved-company').value); }
-    catch { toast('No se ha podido actualizar la agenda de empresas.'); }
-  }
-});
-['company', 'cif', 'hours', 'course-date', 'template'].forEach(id => $(id).addEventListener('input', () => {dirty(); summary();}));
+['company', 'cif', 'hours', 'course-date', 'template', 'training-title'].forEach(id => $(id).addEventListener('input', () => {dirty(); summary();}));
 $('add-student').onclick = () => { students.push({name:'', dni:''}); dirty(); renderStudents(); $('student-rows').lastChild.querySelector('input').focus(); };
 $('clear-students').onclick = () => { if (confirm('¿Vaciar el listado de alumnos?')) { students = []; dirty(); renderStudents(); } };
 $('tab-excel').onclick = () => setTab(true); $('tab-paste').onclick = () => setTab(false);
@@ -240,5 +237,76 @@ $('apply-import').onclick = () => run(async () => {
   students.push(...rows); imported = null; $('mapping-panel').hidden = true; $('paste-text').value = ''; dirty(); renderStudents(); toast(`${rows.length} alumnos añadidos. Revisa sus datos.`);
 });
 $('preview').onclick = () => run(() => generate(true)); $('generate').onclick = () => run(() => generate(false));
-run(async () => { companies = readCompanies(); showCompanies(); });
-run(async () => { const [p, , health] = await Promise.all([api('/api/profile'), loadTemplates(), api('/api/health')]); profile = p; updateProfile(); $('trial-notice').hidden = !health.storage_ephemeral; });
+run(async () => { const [p, , health] = await Promise.all([api('/api/profile'), loadTemplates(), api('/api/health'), migrateCompanies()]); profile = p; updateProfile(); $('trial-notice').hidden = !health.storage_ephemeral; });
+
+$('template').addEventListener('change', () => { $('hours').value = templates.find(t => t.id === $('template').value)?.hours ?? ''; dirty(); });
+$('open-course').onclick = () => {
+  const course = templates.find(t => t.id === $('template').value);
+  if (!course) return toast('Selecciona primero un curso.');
+  $('course-name').value = course.name; $('default-hours').value = course.hours ?? ''; $('course-dialog').showModal();
+};
+$('course-settings-form').onsubmit = event => { event.preventDefault(); run(async () => {
+  const id = $('template').value;
+  await api(`/api/templates/${id}/settings`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('course-name').value,hours:$('default-hours').value ? Number($('default-hours').value) : null})});
+  await loadTemplates(id); $('hours').value = templates.find(t => t.id === id).hours ?? '';
+  dirty(); $('course-dialog').close(); toast('Curso y duración habitual guardados.');
+}); };
+function trainingData() {
+  return {title:$('training-title').value,template_id:$('template').value,company:$('company').value,cif:$('cif').value,hours:$('hours').value,course_date:$('course-date').value,students:students.map(s => ({...s}))};
+}
+function restoreTraining(data, id = null) {
+  if ((students.length || $('company').value) && !confirm('¿Sustituir los datos del formulario por esta formación?')) return false;
+  if (data.template_id && !templates.some(t => t.id === data.template_id)) { toast('La plantilla de esta formación no está disponible. Añádela antes de recuperar sus datos.'); return false; }
+  $('training-title').value = data.title || '';
+  $('template').value = data.template_id || ''; $('company').value = data.company || ''; $('cif').value = data.cif || '';
+  $('hours').value = data.hours ?? ''; $('course-date').value = data.course_date || '';
+  $('saved-company').value = companies.find(c => cleanDni(c.cif) === cleanDni(data.cif || ''))?.id || '';
+  students = (data.students || []).map(s => ({name:s.name || '',dni:s.dni || ''})); currentDraftId = id;
+  dirty(); renderStudents(); $('draft-status').textContent = id ? 'Borrador recuperado' : 'Copia recuperada: las nuevas emisiones usarán tu perfil actual';
+  return true;
+}
+$('save-draft').onclick = () => run(async () => {
+  const snapshot = trainingData(), started = revision;
+  $('save-draft').disabled = true;
+  try {
+    const result = await api(currentDraftId ? `/api/drafts/${currentDraftId}` : '/api/drafts',{method:currentDraftId ? 'PUT' : 'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(snapshot)});
+    currentDraftId = result.id; $('draft-status').textContent = started === revision ? 'Borrador guardado' : 'Borrador guardado; hay cambios posteriores sin guardar'; toast('Borrador guardado.');
+  } finally { $('save-draft').disabled = false; }
+});
+function trainingCard(title, detail) {
+  const card = document.createElement('section'); card.className = 'saved-training';
+  const heading = document.createElement('h3'); heading.textContent = title;
+  const info = document.createElement('p'); info.textContent = detail;
+  const actions = document.createElement('div'); actions.className = 'saved-actions'; card.append(heading,info,actions);
+  return {card,actions};
+}
+function action(label, task) { const button = document.createElement('button'); button.className = 'button secondary small'; button.textContent = label; button.onclick = () => run(task); return button; }
+async function loadDrafts() {
+  const records = await api('/api/drafts'); $('draft-list').replaceChildren();
+  if (!records.length) $('draft-list').textContent = 'Todavía no tienes borradores.';
+  records.forEach(record => {
+    const d = record.data, {card,actions} = trainingCard(d.title || d.company || 'Borrador sin título', `${d.course_date || 'Sin fecha'} · ${d.students.length} alumno(s) · Guardado ${new Date(record.updated).toLocaleString('es-ES')}`);
+    actions.append(action('Recuperar',async () => { if (restoreTraining(d,record.id)) $('drafts-dialog').close(); }),action('Eliminar',async () => {
+      if (!confirm('¿Eliminar este borrador?')) return;
+      await api(`/api/drafts/${record.id}`,{method:'DELETE'}); if (currentDraftId === record.id) currentDraftId = null; await loadDrafts();
+    })); $('draft-list').append(card);
+  });
+}
+$('open-drafts').onclick = () => run(async () => { await loadDrafts(); $('drafts-dialog').showModal(); });
+async function loadHistory() {
+  const params = new URLSearchParams({q:$('history-search').value,course_date:$('history-date').value,offset:historyOffset});
+  const records = await api('/api/history?'+params); $('history-list').replaceChildren();
+  $('history-total').textContent = `${records.total} formación(es). Mostrando ${records.items.length ? historyOffset+1 : 0}–${historyOffset+records.items.length}.`;
+  $('history-prev').disabled = historyOffset === 0; $('history-next').disabled = historyOffset+50 >= records.total;
+  if (!records.items.length) $('history-list').textContent = 'No hay certificados que coincidan con la búsqueda.';
+  records.items.forEach(record => {
+    const d = record.data, {card,actions} = trainingCard(`${d.title ? d.title+' · ' : ''}${d.company} · ${record.course}`, `${d.course_date} · ${d.students.length} alumno(s) · ${record.technician} · Emitido ${new Date(record.created).toLocaleString('es-ES')}`);
+    [['Word',record.files.word],['PDF',record.files.pdf]].forEach(([label,url]) => { if (url) { const link = document.createElement('a'); link.className = 'button secondary small'; link.textContent = 'Descargar '+label; link.href = url; actions.append(link); } });
+    actions.append(action('Recuperar para corregir',async () => { if (restoreTraining(d)) { $('history-dialog').close(); toast('Datos recuperados. Generar creará una nueva versión y conservará la anterior.'); } }));
+    $('history-list').append(card);
+  });
+}
+$('open-history').onclick = () => run(async () => { historyOffset = 0; await loadHistory(); $('history-dialog').showModal(); });
+$('history-search-form').onsubmit = event => { event.preventDefault(); historyOffset = 0; run(loadHistory); };
+$('history-prev').onclick = () => { historyOffset = Math.max(0,historyOffset-50); run(loadHistory); };
+$('history-next').onclick = () => { historyOffset += 50; run(loadHistory); };

@@ -11,6 +11,7 @@ import uuid
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from openpyxl import load_workbook
 from PIL import Image, UnidentifiedImageError
@@ -19,6 +20,8 @@ from pydantic import BaseModel, Field, field_validator
 from .documents import check_zip, convert_pdf, inspect_template, office_binary, render_batch
 from .access import authorized, configured
 from .defaults import seed_templates
+from .storage import open_store, StorageUnavailable
+from .validation import review_students
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = Path(os.environ.get('CERTICOEX_DATA', ROOT / '.local/data'))
@@ -55,6 +58,11 @@ async def invalid_input(request, exc):
     return JSONResponse({'detail': str(exc)}, status_code=422)
 
 
+@app.exception_handler(StorageUnavailable)
+async def unavailable_storage(request, exc):
+    return JSONResponse({'detail':'No se puede acceder al almacenamiento. Revisa la conexión de la base de datos en Render y vuelve a intentarlo.'},status_code=503)
+
+
 def atomic_json(path, data):
     temp = path.with_suffix('.tmp')
     temp.write_text(json.dumps(data, ensure_ascii=False), encoding='utf8')
@@ -64,9 +72,13 @@ def atomic_json(path, data):
 def template_path(key):
     if not re.fullmatch(r'[a-f0-9]{32}', key):
         raise HTTPException(404, 'Plantilla no encontrada.')
-    path = DATA / 'templates' / (key + '.docx')
-    if not path.is_file():
+    content = open_store(DATA).asset('templates/'+key)
+    if content is None:
         raise HTTPException(404, 'Plantilla no encontrada.')
+    path = DATA / 'templates' / (key + '.docx')
+    path.parent.mkdir(parents=True,exist_ok=True)
+    if not path.exists() or path.read_bytes() != content:
+        path.write_bytes(content)
     return path
 
 
@@ -76,6 +88,8 @@ def store_template(data, name):
     (DATA / 'templates' / (key + '.docx')).write_bytes(data)
     meta = {'id': key, 'name': name.strip()[:120] or 'Curso sin título', 'fields': fields}
     atomic_json(DATA / 'templates' / (key + '.json'), meta)
+    db = open_store(DATA)
+    db.bundle('template',key,meta,{'templates/'+key:data})
     return meta
 
 
@@ -83,12 +97,16 @@ def store_template(data, name):
 def health():
     if not configured():
         raise HTTPException(503, 'Falta configurar el acceso privado.')
-    return {'status': 'ok', 'pdf_available': bool(office_binary()), 'storage_ephemeral':os.environ.get('CERTICOEX_EPHEMERAL', '').lower() == 'true'}
+    db = open_store(DATA)
+    db.get('settings','profile')
+    external = bool(os.environ.get('CERTICOEX_DATABASE_URL'))
+    ephemeral = not external and os.environ.get('CERTICOEX_EPHEMERAL', '').lower() == 'true'
+    return {'status': 'ok', 'pdf_available': bool(office_binary()), 'storage_ephemeral':ephemeral, 'storage_external':external}
 
 
 @app.get('/api/templates')
 def templates():
-    return [json.loads(p.read_text(encoding='utf8')) for p in sorted((DATA / 'templates').glob('*.json'))]
+    return open_store(DATA).all('template')
 
 
 @app.post('/api/templates')
@@ -106,17 +124,17 @@ def upload_template(file: UploadFile = File(...), name: str = Form(...)):
 
 @app.get('/api/profile')
 def profile():
-    path = DATA / 'profile.json'
-    data = json.loads(path.read_text(encoding='utf8')) if path.exists() else {'name': ''}
-    return {**data, 'has_signature': (DATA / 'signature.png').exists()}
+    db = open_store(DATA)
+    data = db.get('settings','profile',{'name':''})
+    return {**data, 'has_signature': db.asset('signature') is not None}
 
 
 @app.get('/api/profile/signature')
 def signature_file():
-    path = DATA / 'signature.png'
-    if not path.exists():
+    content = open_store(DATA).asset('signature')
+    if content is None:
         raise HTTPException(404)
-    return FileResponse(path)
+    return Response(content,media_type='image/png')
 
 
 @app.post('/api/profile')
@@ -124,6 +142,7 @@ def save_profile(name: str = Form(...), signature: UploadFile | None = File(None
     name = name.strip()
     if not name or len(name) > 160:
         raise ValueError('Introduce tu nombre completo (máximo 160 caracteres).')
+    assets={}
     if signature and signature.filename:
         raw = signature.file.read(5_000_001)
         if len(raw) > 5_000_000:
@@ -138,10 +157,127 @@ def save_profile(name: str = Form(...), signature: UploadFile | None = File(None
                 temp = DATA / 'signature.tmp'
                 temp.write_bytes(out.getvalue())
                 temp.replace(DATA / 'signature.png')
+                assets['signature']=out.getvalue()
         except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
             raise ValueError('No se puede leer la imagen de firma.') from exc
     atomic_json(DATA / 'profile.json', {'name': name})
+    open_store(DATA).bundle('settings','profile',{'name':name},assets)
     return profile()
+
+
+class Company(BaseModel):
+    id: str | None = Field(default=None, max_length=64)
+    name: str = Field(min_length=1,max_length=200)
+    cif: str = Field(min_length=1,max_length=30)
+
+    @field_validator('name','cif')
+    @classmethod
+    def clean(cls,value):
+        value=value.strip()
+        if not value or any(ord(c)<32 for c in value): raise ValueError('Completa empresa y CIF.')
+        return value
+
+
+@app.get('/api/companies')
+def companies():
+    return sorted(open_store(DATA).all('company'),key=lambda e:normalize(e['name']))
+
+
+@app.post('/api/companies')
+def save_company(payload: Company):
+    db=open_store(DATA)
+    normalized=lambda v:re.sub(r'[\s.\-]','',v).upper()
+    existing=next((e for e in db.all('company') if normalized(e['cif'])==normalized(payload.cif)),None)
+    if not existing and payload.id: existing=db.get('company',payload.id)
+    key=existing['id'] if existing else uuid.uuid4().hex
+    return db.put('company',key,{'id':key,'name':payload.name,'cif':payload.cif})
+
+
+@app.post('/api/companies/import')
+def migrate_companies(payload: list[Company]):
+    if len(payload)>2000: raise ValueError('Importa como máximo 2000 empresas.')
+    db=open_store(DATA)
+    known={re.sub(r'[\s.\-]','',e['cif']).upper() for e in db.all('company')}
+    for entry in payload:
+        normalized=re.sub(r'[\s.\-]','',entry.cif).upper()
+        if normalized not in known:
+            save_company(entry);known.add(normalized)
+    return companies()
+
+
+class CourseSettings(BaseModel):
+    name: str = Field(min_length=1,max_length=120)
+    hours: float | None = Field(default=None,gt=0,le=1000,allow_inf_nan=False)
+
+
+@app.put('/api/templates/{key}/settings')
+def course_settings(key: str, payload: CourseSettings):
+    db=open_store(DATA)
+    meta=db.get('template',key)
+    if not meta: raise HTTPException(404,'Curso no encontrado.')
+    if not payload.name.strip(): raise ValueError('Introduce un nombre para el curso.')
+    meta.update(name=payload.name.strip(),hours=payload.hours)
+    return db.put('template',key,meta)
+
+
+class Review(BaseModel):
+    students: list[dict[str,str]] = Field(max_length=500)
+
+
+@app.post('/api/review')
+def review(payload: Review):
+    return {'issues':review_students(payload.students)}
+
+
+class Draft(BaseModel):
+    title: str = Field(default='',max_length=200)
+    template_id: str = Field(default='',max_length=64)
+    company: str = Field(default='',max_length=200)
+    cif: str = Field(default='',max_length=30)
+    hours: str = Field(default='',max_length=20)
+    course_date: str = Field(default='',max_length=20)
+    students: list[dict[str,str]] = Field(default_factory=list,max_length=500)
+
+    @field_validator('students')
+    @classmethod
+    def safe_rows(cls, rows):
+        for row in rows:
+            if set(row)-{'name','dni'} or len(row.get('name',''))>180 or len(row.get('dni',''))>30:
+                raise ValueError('Fila de alumno no válida.')
+        return rows
+
+
+@app.post('/api/drafts')
+def new_draft(payload: Draft):
+    key=uuid.uuid4().hex
+    return update_draft(key,payload)
+
+
+@app.put('/api/drafts/{key}')
+def update_draft(key: str, payload: Draft):
+    if not re.fullmatch(r'[a-f0-9]{32}',key): raise HTTPException(404)
+    record={'id':key,'updated':datetime.now(timezone.utc).isoformat(),'data':payload.model_dump()}
+    return open_store(DATA).put('draft',key,record)
+
+
+@app.get('/api/drafts')
+def drafts():
+    return open_store(DATA).all('draft')
+
+
+@app.delete('/api/drafts/{key}')
+def delete_draft(key: str):
+    open_store(DATA).delete('draft',key)
+    return {'deleted':True}
+
+
+@app.get('/api/history')
+def history(q: str='', course_date: str='', offset: int=0):
+    records=open_store(DATA).all('history')
+    needle=normalize(q)
+    records=[r for r in records if (not course_date or r['data']['course_date']==course_date) and (not needle or needle in normalize(json.dumps(r,ensure_ascii=False)))]
+    offset=max(0,offset)
+    return {'total':len(records),'items':records[offset:offset+50]}
 
 
 def normalize(value):
@@ -225,6 +361,7 @@ class Student(BaseModel):
 
 
 class Batch(BaseModel):
+    title: str = Field(default='',max_length=200)
     template_id: str
     company: str = Field(min_length=1, max_length=200)
     cif: str = Field(min_length=1, max_length=30)
@@ -250,6 +387,11 @@ def clean_jobs():
     for folder in (DATA / 'jobs').iterdir():
         if folder.is_dir() and folder.stat().st_mtime < cutoff:
             shutil.rmtree(folder)
+    db=open_store(DATA)
+    for job in db.all('preview'):
+        if job['created'] < cutoff:
+            for kind in ('pdf','docx'): db.delete_asset('jobs/'+job['id']+'/'+kind)
+            db.delete('preview',job['id'])
 
 
 @app.post('/api/generate')
@@ -272,13 +414,29 @@ def generate(payload: Batch):
     common = {'EMPRESA': payload.company, 'CIF': payload.cif, 'HORAS': f'{payload.hours:g}', 'FECHA': f'{d.day} de {MONTHS[d.month-1]} de {d.year}', 'TECNICO': current['name']}
     students = [s.model_dump() for s in (payload.students[:1] if payload.preview else payload.students)]
     output = folder / 'certificados.docx'
-    render_batch(template, students, common, (DATA / 'signature.png').read_bytes(), output)
+    db=open_store(DATA)
+    render_batch(template, students, common, db.asset('signature'), output)
     result = {'word': f'/api/files/{key}/docx', 'count': len(students), 'pdf': None, 'pages': None}
     try:
         _, pages = convert_pdf(output, folder)
         result.update(pdf=f'/api/files/{key}/pdf', pages=pages)
     except RuntimeError as exc:
         result['warning'] = str(exc)
+    assets={}
+    for kind in ('docx','pdf'):
+        if kind=='pdf' and not result['pdf']: continue
+        path=folder/('certificados.'+kind)
+        if path.exists(): assets['jobs/'+key+'/'+kind]=path.read_bytes()
+    if payload.preview:
+        db.bundle('preview',key,{'id':key,'created':datetime.now(timezone.utc).timestamp()},assets)
+    else:
+        meta=db.get('template',payload.template_id,{})
+        record={'id':key,'created':datetime.now(timezone.utc).isoformat(),'course':meta.get('name','Curso'),
+                'technician':current['name'],'data':payload.model_dump(mode='json'),'files':result,
+                'issues':review_students(students)}
+        db.bundle('history',key,record,assets)
+        save_company(Company(name=payload.company,cif=payload.cif))
+        result['history_id']=key
     return result
 
 
@@ -286,6 +444,13 @@ def generate(payload: Batch):
 def download(key: str, kind: str, inline: bool = False):
     if not re.fullmatch(r'[a-f0-9]{32}', key) or kind not in ('pdf', 'docx'):
         raise HTTPException(404)
+    db=open_store(DATA)
+    content=db.asset('jobs/'+key+'/'+kind)
+    preview=db.get('preview',key)
+    if preview and preview['created']<datetime.now(timezone.utc).timestamp()-86400:
+        raise HTTPException(404,'La vista previa ha caducado. Vuelve a generarla.')
+    if content is not None:
+        return Response(content,media_type='application/pdf' if kind=='pdf' else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',headers={'Content-Disposition':('inline' if inline else 'attachment')+'; filename="certificados.'+kind+'"'})
     path = DATA / 'jobs' / key / ('certificados.' + kind)
     if not path.exists() or path.stat().st_mtime < datetime.now(timezone.utc).timestamp() - 86400:
         raise HTTPException(404, 'Archivo caducado. Vuelve a generar los certificados.')

@@ -6,3 +6,4 @@ Pillow==12.3.0
 pypdf==6.10.0
 python-multipart==0.0.32
 lxml==6.1.1
+psycopg[binary]==3.2.6

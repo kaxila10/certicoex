@@ -7,3 +7,7 @@ button.profile-status{width:100%;text-align:left;font:inherit;font-size:11px}
 .trial-notice{background:#fff8e9;border:1px solid #eddab1;color:#775c29;padding:12px 15px;border-radius:7px;font-size:12px;margin-bottom:22px;line-height:1.6}
 
 .work-grid{margin-top:30px}.company-help{font-size:10px;color:var(--sub);margin:-8px 0 18px}.company-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:-5px 0 18px}.company-actions>span{font-size:10px;color:var(--teal)}
+
+.training-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:24px}.training-tools>span{font-size:11px;color:var(--sub)}.history-dialog{max-width:800px}.saved-training{padding:16px 0;border-bottom:1px solid var(--line)}.saved-training h3{font-size:14px;margin:0 0 5px;overflow-wrap:anywhere}.saved-training p{font-size:11px;color:var(--sub);margin:4px 0}.saved-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}.history-pages{display:flex;justify-content:space-between;margin-top:20px}#history-total{font-size:11px;color:var(--sub)}.input-warning{border-color:#c49c50;background:#fffcf4}
+
+.validation.review-ok{color:var(--teal)}

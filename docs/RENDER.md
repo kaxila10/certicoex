@@ -15,7 +15,7 @@ La plantilla preparada de manipulado, envasado y control de maquinaria se carga 
 
 ## Límites de esta prueba
 
-El plan Free usa almacenamiento temporal: perfil, firma, plantillas añadidas y documentos pueden perderse al reiniciar, redesplegar o suspender la instancia. La plantilla inicial se restaura desde el código; los demás datos no. La app muestra un aviso de este modo. Para conservar tus datos de forma estable hará falta configurar almacenamiento persistente y revisar su coste; esta configuración no contrata ningún disco.
+Sin una base de datos externa, el plan Free usa almacenamiento temporal: empresas, perfil, firma, plantillas añadidas, cursos, borradores, historial y documentos pueden perderse al reiniciar, redesplegar o suspender la instancia. La plantilla inicial se restaura desde el código; los demás datos no. La app muestra un aviso de este modo. Para conservar tus datos, sigue [las opciones de guardado permanente](PERSISTENCE.md): PostgreSQL externo o disco persistente. Esta configuración no contrata recursos de pago.
 
 Render puede suspender el servicio por inactividad y la primera entrada tardará más. La conversión de grandes lotes depende de la memoria y los tiempos de espera del plan; empieza con 2–3 alumnos ficticios. La prueba local de 50 alumnos no garantiza ese tamaño en el plan Free. No es todavía una versión multiusuario: hay una contraseña y un perfil de técnico por instalación.
 

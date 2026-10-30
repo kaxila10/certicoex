@@ -55,6 +55,7 @@ with tempfile.TemporaryDirectory(prefix='certicoex-browser-') as folder:
             page.locator('#cif').fill('B12345678');page.locator('#hours').fill('8');page.locator('#course-date').fill('2026-10-30')
             assert page.locator('.step-strip').count()==0
             page.locator('#save-company').click()
+            page.wait_for_function('() => document.querySelector("#company-save-status").textContent === "Empresa guardada en la app"')
             company_id=page.locator('#saved-company').input_value()
             assert company_id
             page.reload()
@@ -67,19 +68,39 @@ with tempfile.TemporaryDirectory(prefix='certicoex-browser-') as folder:
             page.locator('#company').fill('Segunda empresa de prueba')
             page.locator('#cif').fill('B87654321')
             page.locator('#save-company').click()
+            page.wait_for_function('() => document.querySelector("#company-save-status").textContent === "Empresa guardada en la app"')
             assert page.locator('#saved-company option').count()==3
             page.locator('#saved-company').select_option(company_id)
             assert page.locator('#cif').input_value()=='B12345678'
             page.locator('#cif').fill('B12345679')
             page.locator('#save-company').click()
+            page.wait_for_function('() => document.querySelector("#company-save-status").textContent === "Empresa guardada en la app"')
             page.reload()
             page.wait_for_function('() => document.querySelector("#template").options.length > 1')
             page.locator('#saved-company').select_option(company_id)
             assert page.locator('#cif').input_value()=='B12345679'
             assert page.locator('#saved-company option').count()==3
             page.locator('#hours').fill('8');page.locator('#course-date').fill('2026-10-30')
+            page.locator('#open-course').click()
+            page.locator('#course-name').fill('Manipulado · curso configurado')
+            page.locator('#default-hours').fill('6.5')
+            page.locator('#course-settings-form button').last.click()
+            page.wait_for_function('() => !document.querySelector("#course-dialog").open')
+            assert page.locator('#hours').input_value()=='6.5'
             page.locator('#excel-file').set_input_files(excel)
             page.locator('#apply-import').click();page.wait_for_function("() => document.querySelector('#student-count').textContent === '1'")
+            page.locator('#training-title').fill('Borrador de formación · prueba')
+            page.locator('#student-rows tr').first.locator('input').last.fill('')
+            page.locator('#save-draft').click()
+            page.wait_for_function('() => document.querySelector("#draft-status").textContent === "Borrador guardado"')
+            page.reload()
+            page.wait_for_function('() => document.querySelector("#template").options.length > 1')
+            assert page.locator('#hours').input_value()=='6.5'
+            page.locator('#open-drafts').click()
+            page.locator('#draft-list button').filter(has_text='Recuperar').click()
+            assert page.locator('#training-title').input_value()=='Borrador de formación · prueba'
+            assert page.locator('#student-rows tr').first.locator('input').last.input_value()==''
+            page.locator('#student-rows tr').first.locator('input').last.fill('12345678Z')
             page.locator('#tab-paste').click()
             page.locator('#paste-text').fill('Nombre completo\tDNI/NIE\nLuis Pérez Martín\t87654321X\nAlumno a eliminar\t22222222J')
             page.locator('#parse-paste').click();page.locator('#apply-import').click()
@@ -104,6 +125,17 @@ with tempfile.TemporaryDirectory(prefix='certicoex-browser-') as folder:
             assert 'Ana García López Corregida' in reader.pages[0].extract_text()
             assert 'Luis Pérez Martín' in reader.pages[1].extract_text()
             assert 'Alumno a eliminar' not in ''.join(p.extract_text() for p in reader.pages)
+            page.locator('#open-history').click()
+            page.locator('#history-search').fill('García')
+            page.locator('#history-search-form button').click()
+            page.wait_for_function('() => document.querySelector("#history-total").textContent.startsWith("1 formación")')
+            assert page.locator('#history-list a').count()==2
+            page.once('dialog',lambda d:d.accept())
+            page.locator('#history-list button').filter(has_text='Recuperar').click()
+            assert page.locator('#student-rows tr').first.locator('input').first.input_value()=='Ana García López Corregida'
+            page.locator('#student-rows tr').first.locator('input').last.fill('12345678A')
+            assert 'letra de control incorrecta' in page.locator('#student-validation').text_content()
+            page.locator('#student-rows tr').first.locator('input').last.fill('12345678Z')
             page.screenshot(path=str(artifacts/'app-desktop.png'),full_page=True)
             page.set_viewport_size({'width':390,'height':844})
             assert page.evaluate('() => document.documentElement.scrollWidth <= innerWidth'), 'Desbordamiento horizontal móvil'

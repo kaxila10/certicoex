@@ -33,7 +33,7 @@ Sube un `.docx` desde «Añadir plantilla», con estos campos, respetando las ll
 
 Los campos del alumno y la firma deben estar en el cuerpo, fuera de cabeceras y pies. Retira nombres y firmas fijos de otras personas. El título, temario, logotipos y estructura vienen del Word. La firma en imagen no es una firma electrónica con certificado digital. Se usa un curso y una empresa por lote.
 
-La plantilla del usuario se adaptó **solo en el almacenamiento local ignorado por Git**, conservando la posición flotante de la firma y sustituyendo el nombre fijo del técnico. Para volver a importar ese mismo ejemplo:
+La plantilla del usuario se adaptó conservando la posición flotante de la firma y sustituyendo el nombre fijo del técnico. Una copia sin la firma anterior, sin datos de alumnos y sin metadatos de autor se distribuye en `defaults/`; los datos personales y las plantillas adicionales se guardan fuera de Git. Para volver a importar ese mismo ejemplo:
 
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/import_example.py '/ruta/al/ejemplo.docx'
@@ -47,7 +47,7 @@ El Excel usa su hoja activa y la primera fila de encabezados. Se muestran hoja, 
 
 Se bloquean datos vacíos y documentos repetidos (ignorando puntos, guiones, espacios y mayúsculas). Los formatos poco habituales producen un aviso; no se comprueba la letra de control ni se verifica la identidad.
 
-Perfil, firma, plantillas y documentos se guardan en `.local/data/`, configurable mediante `CERTICOEX_DATA`, fuera de Git. Los alumnos permanecen en memoria de la página y se pierden al recargar. Sus datos aparecen en los documentos. Las descargas caducan a las 24 horas y los archivos caducados se borran al generar el siguiente lote. Para una limpieza inmediata, detén la app y vacía `.local/data/jobs/`.
+Perfil, firma, empresas, cursos, borradores, historial y documentos se guardan en una base de datos. Por defecto se usa SQLite en `.local/data/certicoex.sqlite3` (carpeta configurable con `CERTICOEX_DATA`). Si se configura `CERTICOEX_DATABASE_URL`, se usa PostgreSQL externo con TLS verificado y el disco local actúa como caché. Los datos sin guardar del formulario siguen perdiéndose al recargar: pulsa «Guardar borrador» para conservar una formación incompleta. Las vistas previas caducan a las 24 horas; los documentos del historial no caducan por la app. No se borran del historial vaciando la caché. Consulta [guardado permanente](docs/PERSISTENCE.md) para activar persistencia real en Render y conocer sus límites.
 
 El uso local puede funcionar sin contraseña, limitado a la interfaz local. El despliegue en Render exige una contraseña de al menos 16 caracteres y protege tanto la interfaz como las APIs y las descargas mediante HTTP Basic sobre HTTPS. No hay separación entre técnicos: el perfil sigue siendo único por instalación. Consulta [la guía de Render](docs/RENDER.md) para preparar una prueba con almacenamiento temporal. El uso compartido con perfiles privados es una fase posterior.
 
@@ -67,4 +67,14 @@ En una máquina con Playwright y Chromium instalados, `python3 scripts/browser_s
 
 ## Agenda de empresas
 
-El selector «Empresa guardada» recupera nombre y CIF. El botón «Guardar empresa y CIF» conserva los datos sin generar documentos; también se guardan automáticamente al generar un lote válido. Se pueden corregir el CIF y guardar de nuevo. Los datos se guardan en el almacenamiento local del navegador (`certicoex.companies.v1`), fuera del almacenamiento temporal de Render. Persisten al recargar y reiniciar el servicio, pero no se comparten entre dispositivos/navegadores y se pierden al borrar los datos del sitio o cerrar una sesión de incógnito. No se guardan alumnos en esta agenda.
+El selector «Empresa guardada» recupera nombre y CIF. El botón «Guardar empresa y CIF» conserva los datos sin generar documentos; también se guardan automáticamente al generar un lote válido. Se pueden corregir el CIF y guardar de nuevo. La agenda se guarda en la base de datos de la app y se comparte entre los dispositivos que acceden a esta instalación. Se importa la agenda anterior del navegador sin sobrescribir empresas actuales y se conserva una copia local de compatibilidad. En Render Free, conectar PostgreSQL externo o montar un disco persistente sigue siendo un requisito para sobrevivir a los reinicios.
+
+## Borradores, cursos e historial
+
+- «Guardar borrador» admite empresa, fecha, horas o alumnos incompletos. «Borradores» permite recuperar, actualizar o eliminar cada borrador. No se guardan automáticamente los cambios sin pulsar el botón.
+- «Configurar curso» guarda el nombre y la duración habitual de su plantilla. Al seleccionar ese curso se rellena la duración, editable para cada formación.
+- La tabla revisa campos vacíos, documentos duplicados, formato y letra de control de DNI/NIE. Vacíos y duplicados bloquean la generación; formato y letra muestran avisos para revisar y permiten documentos especiales. No verifica identidades.
+- Cada lote generado se archiva en «Historial», con su fecha, empresa, alumnos, técnico, Word y PDF (cuando se pudo convertir). Se puede buscar por empresa, alumno o documento y filtrar por fecha. Se muestran 50 entradas por página. Las vistas previas no se archivan.
+- «Recuperar para corregir» copia la formación al formulario y genera una versión nueva con el perfil actual. Los documentos originales se conservan íntegros.
+
+La persistencia PostgreSQL se prueba también con `.venv/bin/python scripts/test_database_persistence.py`, eliminando todo el disco local entre dos instancias de la app. La prueba no usa ninguna base de datos real del usuario.

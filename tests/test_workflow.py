@@ -104,6 +104,7 @@ class Workflow(unittest.TestCase):
 
     def test_signature_required_and_malformed_files(self):
         (self.data/'signature.png').unlink()
+        main.open_store(self.data).delete_asset('signature')
         self.assertEqual(self.client.post('/api/generate',json=self.batch()).status_code,422)
         self.assertEqual(self.client.post('/api/import/excel',files={'file':('x.xlsx',b'not a zip')}).status_code,422)
         self.assertEqual(self.client.post('/api/profile',data={'name':'Test'},files={'signature':('x.png',b'not an image')}).status_code,422)

@@ -28,7 +28,7 @@ class Hosting(unittest.TestCase):
         self.env.stop()
 
     def test_all_private_routes_require_credentials(self):
-        for route in ('/', '/app.js', '/api/templates', '/api/profile', '/api/profile/signature', '/api/files/'+'a'*32+'/pdf', '/openapi.json'):
+        for route in ('/', '/app.js', '/api/templates', '/api/profile', '/api/profile/signature', '/api/companies', '/api/drafts', '/api/history', '/api/files/'+'a'*32+'/pdf', '/openapi.json'):
             response=self.client.get(route)
             self.assertEqual(response.status_code,401,route)
             self.assertIn('Basic',response.headers['www-authenticate'])
