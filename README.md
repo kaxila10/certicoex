@@ -30,9 +30,13 @@ La contraseña del administrador sigue siendo la de Render hasta que se cambie d
 
 En un uso local sin acceso protegido se mantiene el perfil único. `CERTICOEX_MULTIUSER=false` permite el acceso HTTP Basic anterior para instalaciones que lo necesiten; no ofrece cuentas separadas. Se mantiene un proceso de aplicación, y las conversiones PDF se ejecutan por turno para limitar el consumo de memoria cuando coinciden varios técnicos. El logo y el icono de marcadores están disponibles también desde la pantalla de acceso.
 
+## Pantalla de trabajo
+
+La vista de escritorio organiza la formación a la izquierda, los alumnos a la derecha y la generación debajo. Plantillas, empresas y perfil se gestionan en ventanas desde el menú superior. La tabla muestra avisos por fila y un resumen de pendientes; «sin avisos» indica validación automática, no revisión humana. En móvil las secciones se apilan y cada alumno presenta sus campos en dos líneas. El menú de la cuenta permite cambiar la contraseña y, al administrador, gestionar usuarios.
+
 ## Plantillas
 
-«Ver plantillas» muestra todos los cursos guardados y su archivo Word, permite seleccionar un curso y descargar la plantilla original. Las subidas nuevas conservan el nombre del archivo; si una plantilla antigua no lo guardó, se indica y sigue siendo posible descargarla con el nombre del curso. El catálogo y las descargas se comparten entre los técnicos y requieren iniciar sesión en las instalaciones protegidas.
+El menú superior «Plantillas» muestra todos los cursos guardados y su archivo Word, permite seleccionar un curso y descargar la plantilla original. Las subidas nuevas conservan el nombre del archivo; si una plantilla antigua no lo guardó, se indica y sigue siendo posible descargarla con el nombre del curso. El catálogo y las descargas se comparten entre los técnicos y requieren iniciar sesión en las instalaciones protegidas.
 
 El administrador puede pulsar «Eliminar» en cada plantilla y confirmar el borrado para todo el departamento. Se eliminan el registro, el Word y sus copias en la caché local; las empresas, los perfiles y los certificados ya generados se conservan. La acción no tiene deshacer: descarga primero el Word si quieres guardar una copia. En el modo local de perfil único también está disponible.
 
@@ -73,7 +77,7 @@ El Excel usa su hoja activa y la primera fila de encabezados. Se muestran hoja, 
 
 Se bloquean datos vacíos y documentos repetidos (ignorando puntos, guiones, espacios y mayúsculas). Los formatos poco habituales producen un aviso; no se comprueba la letra de control ni se verifica la identidad.
 
-Por defecto se conservan las plantillas, sus ajustes de curso, las empresas (nombre y CIF), las cuentas y el perfil/firma de cada técnico. Los alumnos no se archivan: no hay borradores ni historial activo. Word y PDF se crean en una carpeta temporal que se elimina al terminar la conversión; las descargas quedan únicamente en memoria hasta 30 minutos, con límites de 16 lotes y 64 MB en total. Pueden caducar antes si reinicia el servidor o se llena ese espacio. Tras descargar y guardar los documentos en Google Drive, pulsa «Borrar alumnos y archivos temporales» para eliminar los lotes de esta sesión y limpiar el listado, el texto pegado y el texto reconocido de la pantalla. La app no comprueba ni realiza el guardado en Google Drive. Cerrar o recargar la página elimina el listado de la pantalla; los archivos del servidor caducan por su propio temporizador aunque no haya más solicitudes.
+Por defecto se conservan las plantillas, sus ajustes de curso, las empresas (nombre y CIF), las cuentas y el perfil/firma de cada técnico. Los alumnos no se archivan: no hay borradores ni historial activo. Word y PDF se crean en una carpeta temporal que se elimina al terminar la conversión; las descargas quedan únicamente en memoria hasta 30 minutos, con límites de 16 lotes y 64 MB en total. Pueden caducar antes si reinicia el servidor o se llena ese espacio. Tras descargar y guardar los documentos en Google Drive, pulsa «Borrar datos temporales» para eliminar los lotes de esta sesión y limpiar el listado, el texto pegado y el texto reconocido de la pantalla. La app no comprueba ni realiza el guardado en Google Drive. Cerrar o recargar la página elimina el listado de la pantalla; los archivos del servidor caducan por su propio temporizador aunque no haya más solicitudes.
 
 La configuración se guarda por defecto en SQLite, en `.local/data/certicoex.sqlite3` (carpeta configurable con `CERTICOEX_DATA`). Con `CERTICOEX_DATABASE_URL` se usa PostgreSQL externo con TLS verificado. Render Free necesita esta base externa para conservar plantillas, empresas y perfil tras reiniciar. Consulta [guardado permanente](docs/PERSISTENCE.md). El modo temporal no escribe certificados, vistas previas ni datos de alumnos en esa base.
 
@@ -98,14 +102,14 @@ En una máquina con Playwright y Chromium instalados, `python3 scripts/browser_s
 
 ## Agenda de empresas
 
-El selector «Empresa guardada» recupera nombre y CIF. El botón «Guardar empresa y CIF» conserva los datos sin generar documentos; también se guardan automáticamente al generar un lote válido. Se pueden corregir el CIF y guardar de nuevo. La agenda se guarda en la base de datos de la app y se comparte entre los dispositivos que acceden a esta instalación. Se importa la agenda anterior del navegador sin sobrescribir empresas actuales y se conserva una copia local de compatibilidad. En Render Free, conectar PostgreSQL externo o montar un disco persistente sigue siendo un requisito para sobrevivir a los reinicios.
+En la pantalla principal, «Empresa» busca por nombre o CIF y recupera sus datos al seleccionar un resultado. El menú superior «Empresas» abre la agenda compartida para buscar, crear o editar empresas. «Guardar y usar» guarda nombre y CIF y selecciona la empresa para la formación; cerrar sin guardar conserva los datos de la formación. La agenda se guarda en la base de datos y se comparte entre dispositivos y técnicos. Se importa la agenda anterior del navegador sin sobrescribir empresas actuales y se conserva una copia local de compatibilidad. En Render Free se necesita PostgreSQL externo o un disco persistente para conservarla tras los reinicios.
 
 ## Archivo opcional de formaciones
 
 Este apartado solo aplica con `CERTICOEX_RETAIN_STUDENTS=true`. Con el modo predeterminado, los borradores e historial están desactivados y los certificados se descargan temporalmente.
 
 - «Guardar borrador» admite empresa, fecha, horas o alumnos incompletos. «Borradores» permite recuperar, actualizar o eliminar cada borrador. No se guardan automáticamente los cambios sin pulsar el botón.
-- «Configurar curso» guarda el nombre y la duración habitual de su plantilla. Al seleccionar ese curso se rellena la duración, editable para cada formación.
+- «Plantillas → Editar curso» guarda el nombre y la duración habitual de su plantilla. Al seleccionar ese curso se rellena la duración, editable para cada formación.
 - La tabla revisa campos vacíos, documentos duplicados, formato y letra de control de DNI/NIE. Vacíos y duplicados bloquean la generación; formato y letra muestran avisos para revisar y permiten documentos especiales. No verifica identidades.
 - Cada lote generado se archiva en «Historial», con su fecha, empresa, alumnos, técnico, Word y PDF (cuando se pudo convertir). Se puede buscar por empresa, alumno o documento y filtrar por fecha. Se muestran 50 entradas por página. Las vistas previas no se archivan.
 - «Recuperar para corregir» copia la formación al formulario y genera una versión nueva con el perfil actual. Los documentos originales se conservan íntegros.

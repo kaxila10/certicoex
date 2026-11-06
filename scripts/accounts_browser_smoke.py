@@ -48,10 +48,30 @@ def profile(page, name, signature, title='TÉCNICO EN PRL', salutation='D.'):
     expect(page.locator('#profile-dialog')).not_to_be_visible()
 
 
+def account_action(page, target):
+    if page.locator('#account-menu').get_attribute('open') is None:
+        page.locator('#account-menu > summary').click()
+    page.locator('#'+target).click()
+
+
+def use_company(page):
+    page.locator('#open-companies').click()
+    expect(page.locator('#companies-dialog')).to_be_visible()
+    card = page.locator('#companies-list .saved-training').filter(has=page.locator('h3', has_text='Empresa compartida de prueba'))
+    if card.count():
+        card.get_by_role('button', name='Usar empresa').click()
+    else:
+        page.locator('#company-name').fill('Empresa compartida de prueba')
+        page.locator('#company-cif').fill('B12345678')
+        page.locator('#save-company').click()
+    expect(page.locator('#companies-dialog')).not_to_be_visible()
+    expect(page.locator('#company-search')).to_have_value('Empresa compartida de prueba')
+    expect(page.locator('#company-cif-label')).to_have_text('B12345678')
+
+
 def emit(page):
     page.locator('#template').select_option(label='Plantilla compartida adaptable')
-    page.locator('#company').fill('Empresa compartida de prueba')
-    page.locator('#cif').fill('B12345678')
+    use_company(page)
     page.locator('#course-date').fill('2026-11-06')
     page.locator('#hours').fill('8')
     page.locator('#paste-text').fill('12345678Z GARCIA LOPEZ, ANA')
@@ -101,7 +121,7 @@ with tempfile.TemporaryDirectory(prefix='certicoex-accounts-browser-') as direct
                 expect(owner.locator('#technician-name')).to_have_value('Administrador de prueba')
                 expect(owner.locator('#signature-preview')).to_be_visible()
                 owner.locator('[data-close=profile-dialog]').click()
-                owner.locator('#open-users').click()
+                account_action(owner, 'open-users')
                 for username in ('tecnico2', 'tecnico3', 'tecnico4'):
                     owner.locator('#new-username').fill(username)
                     owner.locator('#initial-password').fill(PASSWORD)
@@ -158,7 +178,7 @@ with tempfile.TemporaryDirectory(prefix='certicoex-accounts-browser-') as direct
                 assert b_context.request.get(BASE + a_pdf).status == 404
                 b_context.request.delete(BASE + a_word.rsplit('/',1)[0])
                 assert a_context.request.get(BASE + a_pdf).status == 200
-                owner.locator('#open-users').click()
+                account_action(owner, 'open-users')
                 card = owner.locator('#users-list .saved-training').filter(has=owner.locator('h3',has_text='tecnico2'))
                 owner.once('dialog', lambda dialog: dialog.accept())
                 card.get_by_role('button',name='Desactivar',exact=True).click()
@@ -175,7 +195,7 @@ with tempfile.TemporaryDirectory(prefix='certicoex-accounts-browser-') as direct
                 a.locator('#open-profile').click()
                 expect(a.locator('#technician-name')).to_have_value('Técnico Alfa')
                 a.locator('[data-close=profile-dialog]').click()
-                a.locator('#open-account').click()
+                account_action(a, 'open-account')
                 a.locator('#current-password').fill('reset-test-only-password-456')
                 a.locator('#new-password').fill('own-test-only-password-789')
                 a.locator('#repeat-password').fill('own-test-only-password-789')
@@ -189,17 +209,75 @@ with tempfile.TemporaryDirectory(prefix='certicoex-accounts-browser-') as direct
                     response = page.context.request.get(BASE + word)
                     assert name in '\n'.join(p.text for p in Document(BytesIO(response.body())).paragraphs)
                     page.locator('[data-close=preview-dialog]').click()
-                b.once('dialog',lambda dialog: dialog.accept()); b.locator('#logout').click()
+                b.once('dialog',lambda dialog: dialog.accept()); account_action(b, 'logout')
                 expect(b.locator('#login-form')).to_be_visible()
                 assert a_context.request.get(BASE + a_pdf).status == 200
                 login(b,'tecnico3')
                 assert b_context.request.get(BASE + b_pdf).status == 404
                 other_tab = a_context.new_page(); other_tab.goto(BASE)
                 expect(other_tab.locator('#account-username')).to_have_text('tecnico2')
-                a.once('dialog',lambda dialog: dialog.accept()); a.locator('#logout').click()
+                a.once('dialog',lambda dialog: dialog.accept()); account_action(a, 'logout')
                 expect(a.locator('#login-form')).to_be_visible()
                 expect(other_tab.locator('#login-form')).to_be_visible()
                 login(a,'tecnico2','own-test-only-password-789')
+                # The compact workspace keeps company edits separate until saved.
+                a.set_viewport_size({'width':1440,'height':900})
+                use_company(a)
+                a.locator('#open-companies').click()
+                a.locator('#company-filter').fill('B12345678')
+                a.locator('#companies-list').get_by_role('button', name='Editar', exact=True).click()
+                a.locator('#company-name').fill('Cambio sin guardar')
+                a.locator('[data-close=companies-dialog]').click()
+                expect(a.locator('#company-search')).to_have_value('Empresa compartida de prueba')
+                a.locator('#open-companies').click()
+                a.locator('#company-filter').fill('B12345678')
+                a.locator('#companies-list').get_by_role('button', name='Editar', exact=True).click()
+                a.locator('#company-cif').fill('B12345679')
+                a.locator('#save-company').click()
+                expect(a.locator('#companies-dialog')).not_to_be_visible()
+                a.locator('#company-search').fill('B12345679')
+                a.locator('#company-search').press('Enter')
+                expect(a.locator('#company-cif-label')).to_have_text('B12345679')
+                expect(a.locator('#company-search')).to_have_value('Empresa compartida de prueba')
+                a.locator('#template').select_option(label='Plantilla compartida adaptable')
+                a.locator('#hours').fill('8'); a.locator('#course-date').fill('2026-11-06')
+                # Editing another course in its dialog preserves the active formation.
+                a.locator('#open-templates').click()
+                other_course = a.locator('#templates-list .saved-training').filter(has=a.locator('h3',has_text='Manipulado, envasado y control de maquinaria'))
+                other_course.get_by_role('button',name='Editar curso').click()
+                a.locator('#default-hours').fill('12')
+                a.locator('#course-settings-form button').last.click()
+                expect(a.locator('#templates-dialog')).to_be_visible()
+                a.locator('[data-close=templates-dialog]').click()
+                expect(a.locator('#template option:checked')).to_have_text('Plantilla compartida adaptable')
+                expect(a.locator('#hours')).to_have_value('8')
+                for name, dni in (('Ana de Prueba','00000000T'),('Luis de Ejemplo','00000001R'),('Marta de Prueba','00000002W'),('Pedro de Ejemplo','00000003B')):
+                    a.locator('#add-student').click()
+                    a.locator('#student-rows tr').last.locator('input').first.fill(name)
+                    a.locator('#student-rows tr').last.locator('input').last.fill(dni)
+                expect(a.locator('#student-rows .row-status').last).to_have_text('Revisar DNI')
+                expect(a.locator('#review-summary')).to_contain_text('1 pendiente')
+                for width, height in ((1440,900),(1366,768)):
+                    a.set_viewport_size({'width':width,'height':height})
+                    a.evaluate('window.scrollTo(0,0)')
+                    assert a.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                    formation = a.locator('.formation-card').bounding_box(); pupils = a.locator('.student-card').bounding_box()
+                    assert abs(formation['y'] - pupils['y']) < 2 and formation['x'] < pupils['x']
+                    bar = a.locator('.action-bar').bounding_box()
+                    assert bar['y'] >= max(formation['y']+formation['height'],pupils['y']+pupils['height']), 'The action bar must not cover the cards'
+                    button = a.locator('#generate').bounding_box()
+                    assert button['y'] >= 0 and button['y']+button['height'] <= height, (width,height,button)
+                    a.screenshot(path=str(ROOT.parent / 'work' / 'compact-ui' / f'desktop-{width}.png'),full_page=True)
+                a.locator('#student-rows tr').last.locator('input').last.fill('00000003A')
+                expect(a.locator('#review-summary')).to_contain_text('sin avisos')
+                a.locator('#paste-text').fill('12345678Z Persona de Prueba')
+                a.locator('#parse-paste').click()
+                expect(a.locator('#review-summary')).to_contain_text('pendiente de añadir')
+                a.locator('#cancel-import').click()
+                expect(a.locator('#student-rows tr')).to_have_count(4)
+                expect(a.locator('#import-inputs')).to_be_visible()
+                a.set_viewport_size({'width':390,'height':844})
+                a.screenshot(path=str(ROOT.parent / 'work' / 'compact-ui' / 'mobile.png'),full_page=True)
                 a.set_viewport_size({'width':390,'height':1000})
                 a.locator('#open-templates').click()
                 expect(a.locator('#templates-dialog')).to_be_visible()

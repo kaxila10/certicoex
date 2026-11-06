@@ -16,8 +16,23 @@ from urllib.request import urlopen
 
 from openpyxl import Workbook
 from PIL import Image, ImageDraw
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
 from pypdf import PdfReader
+
+def add_company(page, name, cif):
+    page.locator('#open-companies').click()
+    page.locator('#company-name').fill(name)
+    page.locator('#company-cif').fill(cif)
+    page.locator('#save-company').click()
+    expect(page.locator('#companies-dialog')).not_to_be_visible()
+    expect(page.locator('#company-search')).to_have_value(name)
+
+
+def pick_company(page, cif):
+    page.locator('#company-search').fill(cif)
+    page.locator('#company-search').press('Enter')
+    expect(page.locator('#company-cif-label')).to_have_text(cif)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 artifacts = ROOT / '.local/validation'
@@ -48,45 +63,38 @@ with tempfile.TemporaryDirectory(prefix='certicoex-browser-') as folder:
             page.wait_for_function("() => document.querySelector('#template').options.length > 1")
             page.locator('#open-profile').click()
             page.locator('#technician-name').fill('Técnico de prueba')
+            page.locator('#technician-title').fill('TÉCNICO EN PRL')
+            page.locator('#technician-salutation').select_option('D.')
             page.locator('#signature').set_input_files(signature)
             page.locator('#profile-form button[type=submit]').click()
             page.wait_for_function("() => !document.querySelector('#profile-dialog').open")
-            page.locator('#company').fill('Empresa de prueba S. L.')
-            page.locator('#cif').fill('B12345678');page.locator('#hours').fill('8');page.locator('#course-date').fill('2026-10-30')
-            assert page.locator('.step-strip').count()==0
-            page.locator('#save-company').click()
-            page.wait_for_function('() => document.querySelector("#company-save-status").textContent === "Empresa guardada en la app"')
+            page.locator('#hours').fill('8');page.locator('#course-date').fill('2026-10-30')
+            add_company(page, 'Empresa de prueba S. L.', 'B12345678')
             company_id=page.locator('#saved-company').input_value()
-            assert company_id
-            page.reload()
-            page.wait_for_function('() => document.querySelector("#template").options.length > 1')
-            page.locator('#saved-company').select_option(company_id)
+            page.reload(); expect(page.locator('#template option').nth(1)).to_be_attached()
+            pick_company(page, 'B12345678')
             assert page.locator('#company').input_value()=='Empresa de prueba S. L.'
-            assert page.locator('#cif').input_value()=='B12345678'
-            page.locator('#saved-company').select_option('')
-            assert page.locator('#cif').input_value()==''
-            page.locator('#company').fill('Segunda empresa de prueba')
-            page.locator('#cif').fill('B87654321')
-            page.locator('#save-company').click()
-            page.wait_for_function('() => document.querySelector("#company-save-status").textContent === "Empresa guardada en la app"')
+            add_company(page, 'Segunda empresa de prueba', 'B87654321')
             assert page.locator('#saved-company option').count()==3
-            page.locator('#saved-company').select_option(company_id)
-            assert page.locator('#cif').input_value()=='B12345678'
-            page.locator('#cif').fill('B12345679')
+            page.locator('#open-companies').click()
+            page.locator('#company-filter').fill('B12345678')
+            page.locator('#companies-list').get_by_role('button', name='Editar', exact=True).click()
+            page.locator('#company-cif').fill('B12345679')
             page.locator('#save-company').click()
-            page.wait_for_function('() => document.querySelector("#company-save-status").textContent === "Empresa guardada en la app"')
-            page.reload()
-            page.wait_for_function('() => document.querySelector("#template").options.length > 1')
-            page.locator('#saved-company').select_option(company_id)
-            assert page.locator('#cif').input_value()=='B12345679'
+            expect(page.locator('#companies-dialog')).not_to_be_visible()
+            page.reload(); expect(page.locator('#template option').nth(1)).to_be_attached()
+            pick_company(page, 'B12345679')
             assert page.locator('#saved-company option').count()==3
             page.locator('#hours').fill('8');page.locator('#course-date').fill('2026-10-30')
-            page.locator('#open-course').click()
+            page.locator('#open-templates').click()
+            page.locator('#templates-list').get_by_role('button',name='Editar curso').first.click()
             page.locator('#course-name').fill('Manipulado · curso configurado')
             page.locator('#default-hours').fill('6.5')
             page.locator('#course-settings-form button').last.click()
             page.wait_for_function('() => !document.querySelector("#course-dialog").open')
             assert page.locator('#hours').input_value()=='6.5'
+            page.locator('[data-close=templates-dialog]').click()
+            page.locator('#tab-excel').click()
             page.locator('#excel-file').set_input_files(excel)
             page.locator('#apply-import').click();page.wait_for_function("() => document.querySelector('#student-count').textContent === '1'")
             assert page.locator('#training-title').count()==0
@@ -115,9 +123,7 @@ with tempfile.TemporaryDirectory(prefix='certicoex-browser-') as folder:
             assert len(preview_pdf.pages)==2
             assert 'Luis Pérez Martín' in preview_pdf.pages[1].extract_text()
             page.locator('[data-close=preview-dialog]').click()
-            page.locator('#saved-company').select_option('')
-            page.locator('#company').fill('Empresa guardada automáticamente')
-            page.locator('#cif').fill('B22222222')
+            add_company(page, 'Empresa guardada automáticamente', 'B22222222')
             page.locator('#generate').click()
             page.wait_for_function("() => !document.querySelector('#downloads').hidden",timeout=60000)
             assert page.locator('#saved-company option').count()==4

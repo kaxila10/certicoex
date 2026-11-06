@@ -8,13 +8,44 @@ const COMPANY_KEY = 'certicoex.companies.v1';
 let companies = [];
 let currentDraftId = null, historyOffset = 0;
 let signedInUser = null, resetUserId = null;
-function showCompanies(selected = '') {
-  $('saved-company').replaceChildren(new Option('Nueva empresa / introducir datos', ''));
+let editingCourseId = null;
+function showCompanies(selected = $('saved-company').value) {
+  $('saved-company').replaceChildren(new Option('Selecciona una empresa', ''));
   companies.sort((a,b) => a.name.localeCompare(b.name,'es')).forEach(c => $('saved-company').add(new Option(`${c.name} · ${c.cif}`,c.id)));
   $('saved-company').value = selected;
 }
-async function loadCompanies(selected = '') {
+async function loadCompanies(selected = $('saved-company').value) {
   companies = await api('/api/companies'); showCompanies(selected);
+}
+function syncCompanyDisplay() {
+  $('company-search').value = $('company').value;
+  $('company-cif-label').textContent = $('cif').value || '—';
+}
+function hideCompanyOptions() { $('company-options').hidden = true; $('company-search').setAttribute('aria-expanded','false'); }
+function chooseCompany(entry) {
+  $('saved-company').value = entry.id;
+  $('company').value = entry.name; $('cif').value = entry.cif;
+  syncCompanyDisplay(); hideCompanyOptions(); dirty(); summary();
+}
+function companyKey(value) { return String(value).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('es'); }
+function renderCompanyOptions() {
+  const query = companyKey($('company-search').value.trim());
+  const found = companies.filter(c => companyKey(c.name+' '+c.cif).includes(query)).slice(0,8);
+  $('company-options').replaceChildren();
+  found.forEach(c => {
+    const option = document.createElement('button'); option.type = 'button'; option.setAttribute('role','option');
+    option.setAttribute('aria-selected',String(c.id === $('saved-company').value));
+    const name = document.createElement('span'), cif = document.createElement('small');
+    name.textContent = c.name; cif.textContent = c.cif; option.append(name,cif);
+    option.onclick = () => { chooseCompany(c); $('company-search').focus(); hideCompanyOptions(); };
+    $('company-options').append(option);
+  });
+  if (!found.length) {
+    const hint = document.createElement('p'); hint.textContent = 'No hay empresas que coincidan.';
+    const add = document.createElement('button'); add.type = 'button'; add.textContent = '+ Crear una empresa'; add.onclick = () => run(() => openCompanies(true));
+    $('company-options').append(hint,add);
+  }
+  $('company-options').hidden = false; $('company-search').setAttribute('aria-expanded','true');
 }
 async function migrateCompanies() {
   try {
@@ -23,13 +54,39 @@ async function migrateCompanies() {
   } catch { toast('La agenda anterior de este navegador no se pudo importar. Sus datos se conservan.'); }
   await loadCompanies();
 }
-async function saveCompany(notify = true) {
-  if (!$('company').reportValidity() || !$('cif').reportValidity()) return;
-  const entry = await api('/api/companies',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:$('saved-company').value || null,name:$('company').value.trim(),cif:$('cif').value.trim()})});
-  await loadCompanies(entry.id);
-  try { localStorage.setItem(COMPANY_KEY,JSON.stringify(companies)); } catch {}
-  $('company-save-status').textContent = 'Empresa guardada en la app';
-  if (notify) toast('Empresa y CIF guardados.');
+function resetCompanyForm() {
+  $('company-form').reset(); $('company-edit-id').value = '';
+  $('company-form-title').textContent = 'Nueva empresa'; $('company-save-status').textContent = '';
+}
+function renderManagedCompanies() {
+  const query = companyKey($('company-filter').value.trim());
+  const matches = companies.filter(c => companyKey(c.name+' '+c.cif).includes(query));
+  $('companies-list').replaceChildren();
+  if (!matches.length) $('companies-list').textContent = query ? 'No hay coincidencias.' : 'Todavía no hay empresas. Añade la primera.';
+  matches.forEach(company => {
+    const {card,actions} = trainingCard(company.name, 'CIF: '+company.cif);
+    actions.append(action('Usar empresa', async () => { chooseCompany(company); $('companies-dialog').close(); }),
+      action('Editar', async () => {
+        $('company-edit-id').value = company.id; $('company-name').value = company.name; $('company-cif').value = company.cif;
+        $('company-form-title').textContent = 'Editar empresa'; $('company-name').focus();
+      }));
+    $('companies-list').append(card);
+  });
+}
+async function openCompanies(create = false) {
+  hideCompanyOptions(); await loadCompanies(); resetCompanyForm(); $('company-filter').value = ''; renderManagedCompanies();
+  $('companies-dialog').showModal(); (create ? $('company-name') : $('company-filter')).focus();
+}
+async function saveCompany() {
+  if (!$('company-form').reportValidity()) return;
+  $('save-company').disabled = true;
+  try {
+    const entry = await api('/api/companies',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:$('company-edit-id').value || null,name:$('company-name').value.trim(),cif:$('company-cif').value.trim()})});
+    await loadCompanies(entry.id); chooseCompany(entry);
+    try { localStorage.setItem(COMPANY_KEY,JSON.stringify(companies)); } catch {}
+    $('company-save-status').textContent = 'Empresa guardada en la app';
+    $('companies-dialog').close(); toast('Empresa y CIF guardados.');
+  } finally { $('save-company').disabled = false; }
 }
 function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 6500); }
 async function api(url, options = {}) {
@@ -49,10 +106,15 @@ async function api(url, options = {}) {
 function run(task) { return task().catch(error => toast(error.message)); }
 function dirty() { revision++; if (currentDraftId) $('draft-status').textContent = 'Cambios sin guardar'; $('downloads').hidden = true; $('generation-status').textContent = ''; }
 function summary() {
-  $('summary-template').textContent = templates.find(t => t.id === $('template').value)?.name || 'Sin seleccionar';
-  $('summary-company').textContent = $('company').value.trim() || 'Por completar';
-  $('summary-count').textContent = `${students.length} ${students.length === 1 ? 'persona' : 'personas'}`;
+  $('summary-count').textContent = `${students.length} ${students.length === 1 ? 'alumno' : 'alumnos'}`;
   $('student-count').textContent = students.length;
+  updateReviewSummary();
+}
+function updateReviewSummary() {
+  const count = Number($('student-validation').dataset.reviewCount || 0);
+  $('review-summary').textContent = imported ? 'Hay un listado pendiente de añadir.' : !students.length ? 'Añade los alumnos para empezar.' : count ? `${count} ${count === 1 ? 'pendiente' : 'pendientes'} de revisar` : 'Datos completos · sin avisos';
+  $('review-dot').classList.toggle('ready', !!students.length && !count && !imported);
+  $('review-dot').classList.toggle('warning', !!count || !!imported);
 }
 function updateProfile() {
   $('technician-name').value = profile.name || '';
@@ -63,7 +125,7 @@ function updateProfile() {
   const ready = profile.name && profile.has_signature;
   $('profile-status').classList.toggle('ready', !!ready);
   $('profile-status').querySelector('b').textContent = ready ? profile.name : 'Configura tu perfil';
-  $('profile-status').querySelector('small').textContent = ready ? 'Firma guardada · Cambiar perfil' : 'Añade tu nombre y tu firma.';
+  $('profile-status').querySelector('small').textContent = ready ? 'Perfil y firma guardados' : 'Añade tu nombre y tu firma.';
 }
 async function loadTemplates(selected) {
   templates = await api('/api/templates');
@@ -78,7 +140,7 @@ function cleanDni(value) { return value.toUpperCase().replace(/[\s.\-]/g, ''); }
 function validateRows(list, body, status, existing = []) {
   const counts = new Map();
   [...list, ...existing].forEach(s => { const dni = cleanDni(s.dni); if (dni) counts.set(dni, (counts.get(dni) || 0) + 1); });
-  let missing = 0, duplicate = 0, unusual = 0, wrongLetter = 0;
+  let missing = 0, duplicate = 0, unusual = 0, wrongLetter = 0, reviewCount = 0;
   [...body.children].forEach((row, i) => {
     const s = list[i], inputs = row.querySelectorAll('input');
     const emptyName = !s.name.trim(), emptyDni = !s.dni.trim(), repeated = (counts.get(cleanDni(s.dni)) || 0) > 1;
@@ -96,6 +158,15 @@ function validateRows(list, body, status, existing = []) {
     inputs[1].title = badLetter ? 'La letra de control del DNI/NIE no coincide.' : '';
     if (!emptyDni && !standard) unusual++;
     if (badLetter) wrongLetter++;
+    const needsReview = emptyName || emptyDni || repeated || !standard || badLetter;
+    if (needsReview) reviewCount++;
+    const state = row.querySelector('.row-status');
+    if (state) {
+      state.textContent = emptyName || emptyDni ? 'Completar' : repeated ? 'Duplicado' : !standard || badLetter ? 'Revisar DNI' : 'Sin avisos';
+      state.classList.toggle('error', emptyName || emptyDni || repeated);
+      state.classList.toggle('warning', !emptyName && !emptyDni && !repeated && (!standard || badLetter));
+      state.title = emptyName || emptyDni ? 'Completa el nombre y el documento.' : repeated ? 'Este documento aparece más de una vez.' : badLetter ? 'La letra de control no coincide.' : !standard ? 'Comprueba el documento frente al original.' : 'Sin datos vacíos ni avisos de documento.';
+    }
   });
   const messages = [];
   if (missing) messages.push(`${missing} fila(s) con datos incompletos.`);
@@ -103,12 +174,14 @@ function validateRows(list, body, status, existing = []) {
   if (unusual) messages.push(`${unusual} documento(s) con formato poco habitual: revísalos. Comprueba que son los documentos correctos.`);
   if (wrongLetter) messages.push(`${wrongLetter} documento(s) con letra de control incorrecta. Revísalos antes de generar.`);
   status.classList.toggle('review-ok', messages.length === 0);
-  status.textContent = messages.join(' ') || (list.length ? 'Listado revisado: sin datos vacíos, duplicados ni errores de letra de DNI/NIE.' : '');
+  status.textContent = messages.join(' ') || (list.length ? 'Datos completos, sin duplicados ni avisos de DNI/NIE.' : '');
+  status.dataset.reviewCount = String(reviewCount);
   return !missing && !duplicate;
 }
 function validateStudents() {
   const valid = validateRows(students, $('student-rows'), $('student-validation'));
   if (imported) validateImport();
+  updateReviewSummary();
   return valid;
 }
 function renderStudents() {
@@ -124,17 +197,21 @@ function renderStudents() {
       input.addEventListener('input', () => { student[field] = input.value; dirty(); validateStudents(); });
       td.append(input); row.append(td);
     });
+    const state = document.createElement('td'), badge = document.createElement('span'); badge.className = 'row-status'; state.append(badge); row.append(state);
     const td = document.createElement('td'), remove = document.createElement('button');
     remove.textContent = '×'; remove.className = 'remove-row'; remove.setAttribute('aria-label', `Eliminar alumno ${i+1}`);
     remove.onclick = () => { students.splice(i, 1); dirty(); renderStudents(); }; td.append(remove); row.append(td);
     $('student-rows').append(row);
   });
-  $('student-table-wrap').hidden = !students.length; $('empty-students').hidden = !!students.length;
+  $('student-table-wrap').hidden = !students.length || !!imported; $('empty-students').hidden = !!students.length || !!imported;
+  $('import-inputs').hidden = !!imported;
   summary(); validateStudents();
 }
 function showImport(data) {
   imported = data;
   $('mapping-panel').hidden = false;
+  $('import-inputs').hidden = true; $('student-table-wrap').hidden = true; $('empty-students').hidden = true;
+  updateReviewSummary();
   $('import-info').textContent = `${data.rows.length} alumnos detectados${data.sheet ? ` en la hoja «${data.sheet}»` : ''}${data.page_count ? ` · ${data.page_count} página(s)` : ''}. Revisa y corrige los datos antes de añadirlos al listado.`;
   $('column-mapping').hidden = data.mode === 'text';
   $('import-warnings').replaceChildren();
@@ -188,6 +265,7 @@ function renderImportPreview() {
       input.oninput = () => { student[field] = input.value; validateImport(); };
       td.append(input); row.append(td);
     });
+    const state = document.createElement('td'), badge = document.createElement('span'); badge.className = 'row-status'; state.append(badge); row.append(state);
     const td = document.createElement('td'), remove = document.createElement('button');
     remove.type = 'button'; remove.className = 'remove-row'; remove.textContent = '×';
     remove.setAttribute('aria-label', `Quitar de la importación al alumno ${i + 1}`);
@@ -231,7 +309,10 @@ function setTab(selected) {
   });
 }
 function payload(preview) {
+  if (importReading) throw new Error('Espera a que termine la lectura del listado.');
+  if (imported) throw new Error('Añade o cancela el listado detectado antes de generar.');
   if (!$('course-form').reportValidity()) return null;
+  if (!$('company').value || !$('cif').value) { $('company-search').focus(); renderCompanyOptions(); throw new Error('Selecciona una empresa del listado o crea una desde «Empresas».'); }
   if (!profile.name || !profile.has_signature) { $('profile-dialog').showModal(); toast('Guarda tu nombre y firma antes de generar.'); return null; }
   const fields = templates.find(t => t.id === $('template').value)?.fields || [];
   if ((fields.includes('CARGO_TECNICO') && !profile.title) || (fields.includes('TRATAMIENTO_TECNICO') && !profile.salutation)) {
@@ -260,7 +341,7 @@ async function generate(preview) {
     } else {
       $('download-word').href = result.word; $('download-pdf').hidden = !result.pdf;
       if (result.pdf) $('download-pdf').href = result.pdf;
-      const retention = result.temporary_minutes ? `Descargas temporales durante un máximo de ${result.temporary_minutes} minutos. Guarda tus documentos en Google Drive y pulsa «Borrar alumnos y archivos temporales».` : preview ? 'Vista previa disponible durante 24 horas.' : 'Documentos conservados en el historial.';
+      const retention = result.temporary_minutes ? `Descargas temporales durante un máximo de ${result.temporary_minutes} minutos. Guarda tus documentos en Google Drive y pulsa «Borrar datos temporales».` : preview ? 'Vista previa disponible durante 24 horas.' : 'Documentos conservados en el historial.';
       $('result-info').textContent = `${result.count} certificado(s)${result.pages ? ` · ${result.pages} página(s) en el PDF` : ''}. ${retention}`;
       $('downloads').querySelector('h3').textContent = preview ? 'Prueba en Word disponible' : 'Tu lote está listo';
       $('downloads').hidden = false;
@@ -286,8 +367,7 @@ $('clear-temporary').onclick = () => run(async () => {
     toast('Alumnos y archivos temporales de esta sesión eliminados.');
   } finally { $('clear-temporary').disabled = false; }
 });
-['open-profile', 'profile-shortcut', 'profile-status'].forEach(id => $(id).onclick = () => $('profile-dialog').showModal());
-$('open-template').onclick = () => $('template-dialog').showModal();
+['open-profile', 'profile-status'].forEach(id => $(id).onclick = () => $('profile-dialog').showModal());
 document.querySelectorAll('[data-close]').forEach(button => button.onclick = () => $(button.dataset.close).close());
 $('profile-form').onsubmit = event => { event.preventDefault(); run(async () => {
   const data = new FormData(); data.append('name', $('technician-name').value);
@@ -305,23 +385,45 @@ $('template-form').onsubmit = event => { event.preventDefault(); run(async () =>
   $('template-dialog').close(); $('template-form').reset(); toast('Plantilla añadida.');
 }); };
 $('course-form').onsubmit = e => e.preventDefault();
-$('save-company').onclick = () => run(() => saveCompany());
+$('company-form').onsubmit = event => { event.preventDefault(); run(saveCompany); };
+$('open-companies').onclick = () => run(() => openCompanies());
+$('new-company').onclick = () => run(() => openCompanies(true));
+$('reset-company').onclick = () => { resetCompanyForm(); $('company-name').focus(); };
+$('company-filter').oninput = renderManagedCompanies;
 $('saved-company').onchange = () => {
-  const selected = companies.find(e => e.id === $('saved-company').value);
-  $('company').value = selected?.name || '';
-  $('cif').value = selected?.cif || '';
-  $('company-save-status').textContent = selected ? 'Datos de la empresa recuperados' : '';
-  dirty(); summary();
+  const company = companies.find(c => c.id === $('saved-company').value);
+  if (company) chooseCompany(company);
+  else { $('company').value = ''; $('cif').value = ''; syncCompanyDisplay(); dirty(); summary(); }
 };
-$('company').addEventListener('input', () => {
-  const selected = companies.find(e => e.id === $('saved-company').value);
-  if (selected && selected.name !== $('company').value) {
-    $('saved-company').value = '';
-    $('cif').value = '';
+$('company-search').onfocus = renderCompanyOptions;
+$('company-search').oninput = () => {
+  const current = companies.find(c => c.id === $('saved-company').value);
+  if (!current || current.name !== $('company-search').value) {
+    $('saved-company').value = ''; $('company').value = ''; $('cif').value = ''; $('company-cif-label').textContent = '—'; dirty();
   }
-  $('company-save-status').textContent = '';
-});
-$('cif').addEventListener('input', () => { $('company-save-status').textContent = ''; });
+  renderCompanyOptions();
+};
+$('company-search').onkeydown = event => {
+  if (event.key === 'Escape') hideCompanyOptions();
+  if (event.key === 'ArrowDown' || event.key === 'Enter') {
+    event.preventDefault(); renderCompanyOptions();
+    const exact = companies.filter(c => companyKey(c.name) === companyKey($('company-search').value) || companyKey(c.cif) === companyKey($('company-search').value));
+    if (event.key === 'Enter' && exact.length === 1) { chooseCompany(exact[0]); return; }
+    $('company-options').querySelector('button')?.focus();
+  }
+};
+$('company-options').onkeydown = event => {
+  if (event.key === 'Escape') { $('company-search').focus(); hideCompanyOptions(); }
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault(); const buttons = [...$('company-options').querySelectorAll('button')];
+    const step = event.key === 'ArrowDown' ? 1 : -1;
+    buttons[(buttons.indexOf(document.activeElement) + step + buttons.length) % buttons.length]?.focus();
+  }
+};
+['pointerdown','focusin'].forEach(type => document.addEventListener(type, event => {
+  if (!event.target.closest('.company-picker')) hideCompanyOptions();
+  if (!event.target.closest('#account-menu')) $('account-menu').open = false;
+}));
 ['company', 'cif', 'hours', 'course-date', 'template'].forEach(id => $(id).addEventListener('input', () => {dirty(); summary();}));
 $('add-student').onclick = () => { students.push({name:'', dni:''}); dirty(); renderStudents(); $('student-rows').lastChild.querySelector('input').focus(); };
 $('clear-students').onclick = () => { if (confirm('¿Vaciar el listado de alumnos?')) { students = []; dirty(); renderStudents(); } };
@@ -336,10 +438,10 @@ $('drop-zone').onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.pr
 $('parse-paste').onclick = () => run(() => readImport(() => api('/api/import/paste', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text:$('paste-text').value})}), 'Separando nombres y documentos…'));
 ['name', 'dni', 'surname', 'surname2'].forEach(field => $('map-'+field).onchange = importSample);
 $('add-import-student').onclick = () => { importPreview.push({name:'', dni:''}); renderImportPreview(); $('import-rows').lastChild.querySelector('input').focus(); };
-$('cancel-import').onclick = () => { imported = null; importPreview = []; $('mapping-panel').hidden = true; };
+$('cancel-import').onclick = () => { imported = null; importPreview = []; $('mapping-panel').hidden = true; renderStudents(); };
 $('correct-extracted').onclick = () => {
   $('paste-text').value = $('extracted-text').value; setTab('paste');
-  imported = null; importPreview = []; $('mapping-panel').hidden = true; $('paste-text').focus();
+  imported = null; importPreview = []; $('mapping-panel').hidden = true; renderStudents(); $('paste-text').focus();
   toast('Corrige el texto y pulsa «Leer listado» para volver a revisarlo.');
 };
 $('apply-import').onclick = () => run(async () => {
@@ -359,7 +461,7 @@ run(async () => {
   $('archive-tools').hidden = !health.retains_students;
   $('temporary-tools').hidden = !!health.retains_students;
   if (!health.retains_students) {
-    $('storage-footer').textContent = 'Alumnos sin historial · Descargas temporales · Guarda los certificados en tu Google Drive.';
+    $('storage-footer').textContent = 'Los datos de alumnos son temporales. Guarda el PDF en tu Drive.';
   }
 });
 
@@ -372,7 +474,7 @@ $('logout').onclick = () => run(async () => {
   try { localStorage.setItem('certicoex.auth-change', String(Date.now())); } catch {}
   location.replace('/login');
 });
-$('open-account').onclick = () => { $('password-form').reset(); $('password-dialog').showModal(); };
+$('open-account').onclick = () => { $('account-menu').open = false; $('password-form').reset(); $('password-dialog').showModal(); };
 $('password-form').onsubmit = event => { event.preventDefault(); run(async () => {
   if ($('new-password').value !== $('repeat-password').value) throw new Error('Las contraseñas nuevas no coinciden.');
   const button = $('password-save'); button.disabled = true;
@@ -399,7 +501,7 @@ async function loadUsers() {
     $('users-list').append(card);
   });
 }
-$('open-users').onclick = () => run(async () => { await loadUsers(); $('users-dialog').showModal(); });
+$('open-users').onclick = () => run(async () => { $('account-menu').open = false; await loadUsers(); $('users-dialog').showModal(); });
 $('new-user-form').onsubmit = event => { event.preventDefault(); run(async () => {
   const button = $('create-user'); button.disabled = true;
   try {
@@ -423,16 +525,16 @@ $('reset-password-form').onsubmit = event => { event.preventDefault(); run(async
 }); };
 
 $('template').addEventListener('change', () => { $('hours').value = templates.find(t => t.id === $('template').value)?.hours ?? ''; dirty(); });
-$('open-course').onclick = () => {
-  const course = templates.find(t => t.id === $('template').value);
-  if (!course) return toast('Selecciona primero un curso.');
-  $('course-name').value = course.name; $('default-hours').value = course.hours ?? ''; $('course-dialog').showModal();
-};
+function editCourse(course) {
+  editingCourseId = course.id; $('course-name').value = course.name; $('default-hours').value = course.hours ?? '';
+  $('templates-dialog').close(); $('course-dialog').showModal();
+}
 $('course-settings-form').onsubmit = event => { event.preventDefault(); run(async () => {
-  const id = $('template').value;
+  const id = editingCourseId, selected = $('template').value;
   await api(`/api/templates/${id}/settings`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('course-name').value,hours:$('default-hours').value ? Number($('default-hours').value) : null})});
-  await loadTemplates(id); $('hours').value = templates.find(t => t.id === id).hours ?? '';
-  dirty(); $('course-dialog').close(); toast('Curso y duración habitual guardados.');
+  await loadTemplates(selected);
+  if (selected === id) { $('hours').value = templates.find(t => t.id === id)?.hours ?? ''; dirty(); }
+  $('course-dialog').close(); await showTemplates(); toast('Curso y duración habitual guardados.');
 }); };
 function trainingData() {
   return {template_id:$('template').value,company:$('company').value,cif:$('cif').value,hours:$('hours').value,course_date:$('course-date').value,students:students.map(s => ({...s}))};
@@ -442,7 +544,7 @@ function restoreTraining(data, id = null) {
   if (data.template_id && !templates.some(t => t.id === data.template_id)) { toast('La plantilla de esta formación no está disponible. Añádela antes de recuperar sus datos.'); return false; }
   $('template').value = data.template_id || ''; $('company').value = data.company || ''; $('cif').value = data.cif || '';
   $('hours').value = data.hours ?? ''; $('course-date').value = data.course_date || '';
-  $('saved-company').value = companies.find(c => cleanDni(c.cif) === cleanDni(data.cif || ''))?.id || '';
+  $('saved-company').value = companies.find(c => cleanDni(c.cif) === cleanDni(data.cif || ''))?.id || ''; syncCompanyDisplay();
   students = (data.students || []).map(s => ({name:s.name || '',dni:s.dni || ''})); currentDraftId = id;
   dirty(); renderStudents(); $('draft-status').textContent = id ? 'Borrador recuperado' : 'Copia recuperada: las nuevas emisiones usarán tu perfil actual';
   return true;
@@ -476,7 +578,7 @@ async function showTemplates() {
     actions.append(action('Usar plantilla', async () => {
       $('template').value = template.id; $('hours').value = template.hours ?? '';
       dirty(); summary(); $('templates-dialog').close();
-    }), download);
+    }), action('Editar curso', async () => editCourse(template)), download);
     if (signedInUser?.role === 'admin') {
       const remove = action('Eliminar', async () => {
         if (!confirm(`¿Eliminar la plantilla «${template.name}» para todos los técnicos? Se borrará el Word guardado. Esta acción no se puede deshacer.`)) return;
