@@ -63,7 +63,7 @@
   </div>
   <section class="action-bar" aria-label="Generación de certificados">
     <div class="batch-status"><span id="review-dot" class="status-dot" aria-hidden="true"></span><div><b id="summary-count">0 alumnos</b><button type="button" id="review-summary" class="review-jump" aria-live="polite" disabled>Añade los alumnos para empezar.</button></div></div>
-    <div class="generation-actions"><span class="word-note">PDF + Word editable</span><button class="button secondary" id="preview">Vista previa</button><button class="button primary" id="generate">Generar PDF <span aria-hidden="true">→</span></button></div>
+    <div class="generation-actions"><span class="word-note">PDF + Word editable</span><button class="button secondary" id="preview" data-state="idle" aria-busy="false"><span class="button-indicator" aria-hidden="true" hidden></span><span class="button-label">Vista previa</span></button><button class="button primary" id="generate" data-state="idle" aria-busy="false"><span class="button-indicator" aria-hidden="true" hidden></span><span class="button-label">Generar PDF</span></button></div>
   </section>
   <p id="generation-status" role="status" aria-live="polite"></p>
   <section id="layout-report" class="layout-report" hidden aria-live="polite"></section>

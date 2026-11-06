@@ -82,6 +82,71 @@ def emit(page):
     return page.locator('#download-word').get_attribute('href'), page.locator('#download-pdf').get_attribute('href')
 
 
+
+def check_generation_feedback(page, existing_word):
+    held = []
+    def hold(route): held.append(route)
+    page.route('**/api/generate', hold)
+    try:
+        page.locator('#preview').click()
+        expect(page.locator('#preview')).to_have_attribute('data-state','loading')
+        expect(page.locator('#preview .generation-spinner')).to_be_visible()
+        expect(page.locator('#preview .button-label')).to_have_text('Preparando vista previa…')
+        expect(page.locator('#generate')).to_be_disabled()
+        expect(page.locator('#clear-temporary')).to_be_disabled()
+        expect(page.locator('#generation-status')).to_contain_text('Puede tardar unos instantes')
+        page.evaluate("document.getElementById('preview').click()")
+        assert len(held)==1
+        request=held.pop(); request.fulfill(response=request.fetch())
+        expect(page.locator('#preview-dialog')).to_be_visible(timeout=30000)
+        expect(page.locator('#preview')).to_have_attribute('data-state','done')
+        expect(page.locator('#preview')).to_have_attribute('aria-busy','false')
+        expect(page.locator('#preview .button-label')).to_have_text('Vista previa lista')
+        page.locator('[data-close=preview-dialog]').click()
+        # A failure clears the spinner and enables a retry.
+        page.locator('#generate').click()
+        expect(page.locator('#generate .button-label')).to_have_text('Generando Word y PDF…')
+        expect(page.locator('#generate .generation-spinner')).to_be_visible()
+        held.pop().fulfill(status=500,json={'detail':'Fallo simulado de prueba.'})
+        expect(page.locator('#generation-status')).to_contain_text('Fallo simulado de prueba')
+        expect(page.locator('#generate')).to_be_enabled()
+        expect(page.locator('#generate')).to_have_attribute('data-state','idle')
+        expect(page.locator('.generation-spinner')).to_have_count(0)
+        # A completed Word with unavailable PDF must say Word ready.
+        page.locator('#generate').click()
+        expect(page.locator('#generate')).to_have_attribute('data-state','loading')
+        held.pop().fulfill(json={'count':1,'word':existing_word,'pdf':None,'temporary_minutes':30,'warning':'PDF no disponible en esta prueba.'})
+        expect(page.locator('#generate .button-label')).to_have_text('Word listo')
+        expect(page.locator('#download-pdf')).to_be_hidden()
+        expect(page.locator('#download-word')).to_be_visible()
+        # The labels remain inside the mobile buttons while processing.
+        page.set_viewport_size({'width':390,'height':844})
+        page.locator('#generate').click()
+        expect(page.locator('#generate')).to_have_attribute('aria-busy','true')
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        page.locator('.action-bar').screenshot(path=str(ROOT.parent / 'work' / 'loading-mobile.png'))
+        request=held.pop(); request.fulfill(response=request.fetch())
+        expect(page.locator('#generate .button-label')).to_have_text('Documentos listos',timeout=30000)
+        expect(page.locator('#generation-status')).to_contain_text('✓ Documentos listos')
+        expect(page.locator('#download-pdf')).to_be_visible()
+        # Editing during a request invalidates its result without leaving loading behind.
+        page.locator('#generate').click()
+        expect(page.locator('#generate')).to_have_attribute('data-state','loading')
+        page.locator('#hours').fill('9')
+        expect(page.locator('#generate .generation-spinner')).to_be_visible()
+        request=held.pop(); request.fulfill(response=request.fetch())
+        expect(page.locator('#generation-status')).to_contain_text('Los datos cambiaron')
+        expect(page.locator('#generate')).to_have_attribute('data-state','idle')
+        expect(page.locator('#generate')).to_be_enabled()
+        expect(page.locator('#downloads')).to_be_hidden()
+        page.locator('#hours').fill('8')
+        expect(page.locator('#generate .button-label')).to_have_text('Generar PDF')
+        expect(page.locator('#preview .button-label')).to_have_text('Vista previa')
+        page.set_viewport_size({'width':1440,'height':1100})
+    finally:
+        page.unroute('**/api/generate',hold)
+
+
 with tempfile.TemporaryDirectory(prefix='certicoex-accounts-browser-') as directory:
     root = Path(directory); data = root / 'data'; data.mkdir()
     sign(data / 'signature.png', '#508060')
@@ -189,6 +254,7 @@ with tempfile.TemporaryDirectory(prefix='certicoex-accounts-browser-') as direct
                 expect(b.locator('#technician-salutation')).to_have_value('Dña.')
                 b.locator('[data-close=profile-dialog]').click()
                 a_word, a_pdf = emit(a)
+                check_generation_feedback(a,a_word)
                 b.reload(); expect(b.locator('#template option').nth(1)).to_be_attached()
                 expect(b.locator('#saved-company')).to_contain_text('Empresa compartida de prueba')
                 b_word, b_pdf = emit(b)

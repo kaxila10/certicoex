@@ -104,7 +104,23 @@ async function api(url, options = {}) {
   return data;
 }
 function run(task) { return task().catch(error => toast(error.message)); }
-function dirty() { revision++; if (currentDraftId) $('draft-status').textContent = 'Cambios sin guardar'; $('downloads').hidden = true; $('layout-report').hidden = true; $('preview-layout-report').hidden = true; $('generation-status').textContent = ''; }
+function dirty() {
+  revision++; if (currentDraftId) $('draft-status').textContent = 'Cambios sin guardar';
+  $('downloads').hidden = true; $('layout-report').hidden = true; $('preview-layout-report').hidden = true;
+  if (!busy) { resetGenerationButtons(); $('generation-status').textContent = ''; $('generation-status').dataset.state = ''; }
+}
+function setGenerationButton(id, state, doneLabel) {
+  const button = $(id), indicator = button.querySelector('.button-indicator');
+  button.dataset.state = state; button.setAttribute('aria-busy', String(state === 'loading'));
+  indicator.hidden = state === 'idle';
+  indicator.className = 'button-indicator' + (state === 'loading' ? ' generation-spinner' : '');
+  indicator.textContent = state === 'done' ? '✓' : '';
+  button.querySelector('.button-label').textContent = state === 'loading'
+    ? (id === 'preview' ? 'Preparando vista previa…' : 'Generando Word y PDF…')
+    : state === 'done' ? doneLabel || (id === 'preview' ? 'Vista previa lista' : 'Documentos listos')
+    : id === 'preview' ? 'Vista previa' : 'Generar PDF';
+}
+function resetGenerationButtons() { ['preview','generate'].forEach(id => setGenerationButton(id,'idle')); }
 function summary() {
   $('summary-count').textContent = `${students.length} ${students.length === 1 ? 'alumno' : 'alumnos'}`;
   $('student-count').textContent = students.length;
@@ -338,19 +354,23 @@ async function generate(preview) {
   if (busy) return;
   const data = payload(preview); if (!data) return;
 
-  busy = true; const startedAt = revision;
+  resetGenerationButtons();
+  busy = true; const startedAt = revision, activeButton = preview ? 'preview' : 'generate';
+  let completed = false;
+  document.body.classList.add('is-generating'); setGenerationButton(activeButton,'loading');
   ['preview', 'generate', 'clear-temporary'].forEach(id => $(id).disabled = true);
   $('downloads').hidden = true;
   $('layout-report').hidden = true; $('preview-layout-report').hidden = true;
-  $('generation-status').textContent = preview ? 'Preparando la vista previa…' : `Generando ${students.length} certificados. El PDF puede tardar unos instantes…`;
+  $('generation-status').dataset.state = 'loading';
+  $('generation-status').textContent = (preview ? 'Preparando vista previa…' : 'Generando Word y PDF…') + ' Puede tardar unos instantes según el número de alumnos.';
   try {
     const result = await api('/api/generate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
     if (result.temporary_minutes) temporaryKeys.add(result.word.split('/')[3]);
     if (!preview) { await loadCompanies(); const entry = companies.find(c => cleanDni(c.cif) === cleanDni(data.cif)); if (entry) showCompanies(entry.id); try { localStorage.setItem(COMPANY_KEY,JSON.stringify(companies)); } catch {} }
-    if (startedAt !== revision) { $('generation-status').textContent = 'Los datos cambiaron durante la generación. Vuelve a generar para usar los datos actuales.'; return; }
+    if (startedAt !== revision) { $('generation-status').dataset.state = 'warning'; $('generation-status').textContent = 'Los datos cambiaron durante la generación. Vuelve a generar para usar los datos actuales.'; return; }
     showLayoutReport(result);
     if (preview && result.pdf) {
-      openPdfPreview(result); $('generation-status').textContent = 'Vista previa de todos los alumnos preparada.';
+      openPdfPreview(result);
     } else {
       $('download-word').href = result.word; $('download-pdf').hidden = !result.pdf;
       if (result.pdf) $('download-pdf').href = result.pdf;
@@ -358,10 +378,24 @@ async function generate(preview) {
       $('result-info').textContent = `${result.count} certificado(s)${result.pages ? ` · ${result.pages} página(s) en el PDF` : ''}. ${retention}`;
       $('downloads').querySelector('h3').textContent = preview ? 'Prueba en Word disponible' : 'Tu lote está listo';
       $('downloads').hidden = false;
-      $('generation-status').textContent = result.warning || (result.layout?.warnings?.length ? 'Documentos generados. Hay avisos de maquetación para revisar.' : 'Documentos generados correctamente.');
     }
     if (result.warning) toast(result.warning);
-  } finally { busy = false; ['preview', 'generate', 'clear-temporary'].forEach(id => $(id).disabled = false); }
+    completed = true;
+    setGenerationButton(activeButton,'done',result.pdf ? undefined : 'Word listo');
+    const hasWarnings = !!result.warning || !!result.layout?.warnings?.length;
+    $('generation-status').dataset.state = hasWarnings ? 'warning' : 'done';
+    $('generation-status').textContent = result.pdf
+      ? (preview ? '✓ Vista previa lista.' : '✓ Documentos listos.') + (hasWarnings ? ' Revisa los avisos antes de guardar el PDF.' : '')
+      : '✓ Word listo. ' + (result.warning || 'El PDF no está disponible.');
+  } catch (error) {
+    $('generation-status').dataset.state = 'error';
+    $('generation-status').textContent = 'No se pudo completar la generación. ' + error.message;
+    throw error;
+  } finally {
+    busy = false; document.body.classList.remove('is-generating');
+    if (!completed) setGenerationButton(activeButton,'idle');
+    ['preview', 'generate', 'clear-temporary'].forEach(id => $(id).disabled = false);
+  }
 }
 
 function openPdfPreview(result, page = 1) {
