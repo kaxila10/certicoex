@@ -78,6 +78,8 @@ async def local_requests(request: Request, call_next):
     response.headers['Cache-Control'] = 'no-store'
     if path in ('/logo.png', '/favicon.ico'):
         response.headers['Cache-Control'] = 'public, max-age=86400'
+    elif path in ('/section-icons.png', '/user-icon.png'):
+        response.headers['Cache-Control'] = 'private, max-age=86400'
     response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
     return response
 

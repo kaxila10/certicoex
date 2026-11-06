@@ -35,3 +35,5 @@ button.profile-status{width:100%;text-align:left;font:inherit;font-size:11px}
 .brand-logo{display:block;width:34px;height:34px;flex-shrink:0;object-fit:contain}.login-card .brand-logo{width:38px;height:38px}
 
 .template-actions{flex-wrap:wrap}.templates-dialog{max-width:720px}.templates-dialog .saved-training p{overflow-wrap:anywhere}#add-template-from-list{margin-top:18px}
+
+.mini-icon{display:inline-block;flex:0 0 auto;width:28px;height:28px;background-image:url('/section-icons.png?v=1');background-repeat:no-repeat;background-size:200% auto;background-position:left center;vertical-align:middle}.mini-icon.technician-icon{background-position:right center}.mini-icon.user-icon{background-image:url('/user-icon.png?v=1');background-size:contain;background-position:center}.section-index.mini-icon{width:30px;height:30px;background-color:transparent;border:0}.document-icon.mini-icon{display:inline-block;width:40px;height:40px;background-color:transparent}.icon-heading{display:flex;align-items:center;gap:10px}.button .mini-icon{width:22px;height:22px}#profile-status .mini-icon{width:26px;height:26px}
