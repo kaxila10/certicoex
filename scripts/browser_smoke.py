@@ -121,7 +121,7 @@ with tempfile.TemporaryDirectory(prefix='certicoex-browser-') as folder:
             preview_url=page.locator('#pdf-preview').get_attribute('src')
             preview_pdf=PdfReader(BytesIO(context.request.get('http://127.0.0.1:8001'+preview_url).body()))
             assert len(preview_pdf.pages)==2
-            assert 'Luis Pérez Martín' in preview_pdf.pages[1].extract_text()
+            assert 'LUIS PÉREZ MARTÍN' in preview_pdf.pages[1].extract_text()
             page.locator('[data-close=preview-dialog]').click()
             add_company(page, 'Empresa guardada automáticamente', 'B22222222')
             page.locator('#generate').click()
@@ -133,9 +133,9 @@ with tempfile.TemporaryDirectory(prefix='certicoex-browser-') as folder:
                 assert result.value.suggested_filename=='Manipulado · curso configurado - Empresa guardada automáticamente - 30-10-2026.'+('docx' if kind=='word' else 'pdf')
                 result.value.save_as(artifacts/('ejemplo-certificados.'+('docx' if kind=='word' else 'pdf')))
             reader=PdfReader(artifacts/'ejemplo-certificados.pdf');assert len(reader.pages)==2
-            assert 'Ana García López Corregida' in reader.pages[0].extract_text()
-            assert 'Luis Pérez Martín' in reader.pages[1].extract_text()
-            assert 'Alumno a eliminar' not in ''.join(p.extract_text() for p in reader.pages)
+            assert 'ANA GARCÍA LÓPEZ CORREGIDA' in reader.pages[0].extract_text()
+            assert 'LUIS PÉREZ MARTÍN' in reader.pages[1].extract_text()
+            assert 'ALUMNO A ELIMINAR' not in ''.join(p.extract_text() for p in reader.pages)
             page.locator('#open-history').click()
             page.locator('#history-search').fill('García')
             page.locator('#history-search-form button').click()

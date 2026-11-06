@@ -68,12 +68,17 @@ class Workflow(unittest.TestCase):
     def test_split_runs_formatting_and_xml_escaping(self):
         output = self.data/'render.docx'
         batch = self.batch()
+        batch['students'] = [{'name': 'maría josé pérez muñoz', 'dni': '00000000t'},
+                             {'name': 'íñigo núñez', 'dni': 'x0000000t'}]
         common = {'EMPRESA':batch['company'],'CIF':batch['cif'],'HORAS':'8','FECHA':'30 de octubre de 2026','TECNICO':'Técnico de prueba'}
         render_batch(main.template_path(self.template),batch['students'],common,signature(),output)
         doc=Document(output)
         text='\n'.join(p.text for p in doc.paragraphs)
         for student in batch['students']:
-            self.assertEqual(text.count(student['name']),1)
+            self.assertEqual(text.count(student['name'].upper()),1)
+            self.assertIn(student['dni'].upper(), text)
+            self.assertNotIn(student['name'], text)
+        self.assertEqual(batch['students'][0]['name'], 'maría josé pérez muñoz')
         self.assertNotIn('{',text)
         self.assertIn(batch['company'],text)
         self.assertTrue(doc.paragraphs[0].runs[0].bold)
@@ -178,6 +183,8 @@ class Workflow(unittest.TestCase):
         self.assertEqual(saved.status_code, 200, saved.text)
         for preview in (False, True):
             batch=self.batch();batch['preview']=preview
+            batch['students'] = [{'name': 'ana garcía lópez', 'dni': '12345678z'},
+                                 {'name': 'íñigo núñez muñoz', 'dni': 'x0000000t'}]
             batch['template_id'] = uploaded['id']
             response=self.client.post('/api/generate',json=batch)
             self.assertEqual(response.status_code,200,response.text)
@@ -187,8 +194,15 @@ class Workflow(unittest.TestCase):
             self.assertEqual(len(reader.pages),2)
             self.assertEqual(result['count'],2)
             text='\n'.join(p.extract_text() for p in reader.pages)
-            self.assertIn('Ana García López',text)
-            self.assertIn('Luis Pérez Martín',text)
+            self.assertIn('ANA GARCÍA LÓPEZ',text)
+            self.assertIn('ÍÑIGO NÚÑEZ MUÑOZ',text)
+            self.assertIn('12345678Z',text)
+            self.assertIn('X0000000T',text)
+            word = Document(BytesIO(self.client.get(result['word']).content))
+            word_text = '\n'.join(p.text for p in word.paragraphs)
+            for student in batch['students']:
+                self.assertIn(student['name'].upper(), word_text)
+                self.assertIn(student['dni'].upper(), word_text)
             for page in reader.pages:
                 self.assertRegex(page.extract_text(),r'1\.\s+Tema de prueba')
                 self.assertIn('TÉCNICA SUPERIOR EN PRL', page.extract_text())

@@ -44,8 +44,8 @@ Sube un `.docx` desde «Añadir plantilla», con estos campos, respetando las ll
 
 | Campo | Contenido |
 | --- | --- |
-| `{NOMBRE}` | Nombre y apellidos del alumno; puede repetirse |
-| `{DNI/NIE}` | Documento del alumno |
+| `{NOMBRE}` | Nombre y apellidos del alumno en mayúsculas; puede repetirse |
+| `{DNI/NIE}` | Documento del alumno con sus letras en mayúsculas |
 | `{EMPRESA}` / `{CIF}` | Empresa que recibe la formación |
 | `{HORAS}` / `{FECHA}` | Duración y fecha de formación |
 | `{TECNICO}` | Nombre del perfil |

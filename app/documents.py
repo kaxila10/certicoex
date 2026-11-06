@@ -200,7 +200,7 @@ def render_batch(template: Path, students, common, signature: bytes, output: Pat
     for el in list(body):
         body.remove(el)
     for index, student in enumerate(students):
-        values = {**common, 'NOMBRE': student['name'], 'DNI/NIE': student['dni']}
+        values = {**common, 'NOMBRE': student['name'].upper(), 'DNI/NIE': student['dni'].upper()}
         num_map = {}
         # Independent numbering definitions prevent the next student's temario
         # from continuing at 10, 11, ... in either Word or LibreOffice.

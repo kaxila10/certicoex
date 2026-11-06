@@ -72,7 +72,7 @@ try:
         reader=PdfReader(BytesIO(pdf.content));assert len(reader.pages)==2
         for i,student in enumerate(('Ana García López','Luis Pérez Martín')):
             text=reader.pages[i].extract_text()
-            assert student in text
+            assert student.upper() in text
             assert '1. INTRODUCCIÓN' in text
             assert '9. SEGURIDAD VIAL.' in text
         out=ROOT/'.local/render-validation';out.mkdir(parents=True,exist_ok=True)
