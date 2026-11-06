@@ -308,7 +308,8 @@ def user_profile(user_id):
     data = db.get('profile', user_id)
     if data is None:
         data = db.get('settings', 'profile', {'name': ''}) if user_id == 'owner' else {'name': ''}
-    return {**data, 'has_signature': profile_signature(db, user_id) is not None}
+    return {'title': '', 'salutation': '', **data,
+            'has_signature': profile_signature(db, user_id) is not None}
 
 
 @app.get('/api/profile/signature')
@@ -320,11 +321,20 @@ def signature_file(request: Request):
 
 
 @app.post('/api/profile')
-def save_profile(request: Request, name: str = Form(...), signature: UploadFile | None = File(None)):
+def save_profile(request: Request, name: str = Form(...), signature: UploadFile | None = File(None),
+                 title: str | None = Form(None), salutation: str | None = Form(None)):
     name = name.strip()
     if not name or len(name) > 160:
         raise ValueError('Introduce tu nombre completo (máximo 160 caracteres).')
     user_id = request.state.user['id']
+    current = user_profile(user_id)
+    title = current['title'] if title is None else title.strip()
+    salutation = current['salutation'] if salutation is None else salutation.strip()
+    if len(title) > 120 or '\n' in title or '\r' in title:
+        raise ValueError('Introduce un cargo de una sola línea y máximo 120 caracteres.')
+    if salutation not in ('', 'D.', 'Dña.'):
+        raise ValueError('Selecciona el tratamiento D. o Dña.')
+    data = {'name': name, 'title': title, 'salutation': salutation}
     legacy = not accounts.enabled() and user_id == 'owner'
     assets={}
     if signature and signature.filename:
@@ -346,8 +356,8 @@ def save_profile(request: Request, name: str = Form(...), signature: UploadFile 
         except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
             raise ValueError('No se puede leer la imagen de firma.') from exc
     if legacy:
-        atomic_json(DATA / 'profile.json', {'name': name})
-    open_store(DATA).bundle('settings' if legacy else 'profile', 'profile' if legacy else user_id, {'name':name}, assets)
+        atomic_json(DATA / 'profile.json', data)
+    open_store(DATA).bundle('settings' if legacy else 'profile', 'profile' if legacy else user_id, data, assets)
     return user_profile(user_id)
 
 
@@ -569,6 +579,10 @@ def generate(payload: Batch, request: Request):
     current = user_profile(user_id)
     if not current['name'] or not current['has_signature']:
         raise ValueError('Guarda tu nombre y una imagen de firma en el perfil del técnico.')
+    fields = open_store(DATA).get('template', payload.template_id, {}).get('fields', [])
+    if (('CARGO_TECNICO' in fields and not current['title']) or
+            ('TRATAMIENTO_TECNICO' in fields and not current['salutation'])):
+        raise ValueError('Completa tu cargo y tratamiento en Mi perfil para utilizar esta plantilla.')
     seen = set()
     for s in payload.students:
         dni = re.sub(r'[\s.\-]', '', s.dni).upper()
@@ -582,7 +596,8 @@ def generate(payload: Batch, request: Request):
     folder = DATA / 'jobs' / key
     folder.mkdir()
     d = payload.course_date
-    common = {'EMPRESA': payload.company, 'CIF': payload.cif, 'HORAS': f'{payload.hours:g}', 'FECHA': f'{d.day} de {MONTHS[d.month-1]} de {d.year}', 'TECNICO': current['name']}
+    common = {'EMPRESA': payload.company, 'CIF': payload.cif, 'HORAS': f'{payload.hours:g}',
+              'FECHA': f'{d.day} de {MONTHS[d.month-1]} de {d.year}', **technician_fields(current)}
     students = [s.model_dump() for s in payload.students]
     output = folder / 'certificados.docx'
     db=open_store(DATA)
@@ -612,6 +627,11 @@ def generate(payload: Batch, request: Request):
     return result
 
 
+def technician_fields(current):
+    return {'TECNICO': current['name'], 'CARGO_TECNICO': current['title'],
+            'TRATAMIENTO_TECNICO': current['salutation']}
+
+
 def generate_temporary(payload, template, current, user_id):
     key = uuid.uuid4().hex
     db = open_store(DATA)
@@ -619,7 +639,7 @@ def generate_temporary(payload, template, current, user_id):
     filename = document_name(meta.get('name', 'Curso'), payload.company, payload.course_date)
     d = payload.course_date
     common = {'EMPRESA': payload.company, 'CIF': payload.cif, 'HORAS': f'{payload.hours:g}',
-              'FECHA': f'{d.day} de {MONTHS[d.month-1]} de {d.year}', 'TECNICO': current['name']}
+              'FECHA': f'{d.day} de {MONTHS[d.month-1]} de {d.year}', **technician_fields(current)}
     result = {'word': f'/api/files/{key}/docx', 'pdf': None, 'pages': None,
               'count': len(payload.students), 'filename': filename, 'temporary_minutes': LIFETIME_SECONDS // 60}
     with TemporaryDirectory(prefix='certicoex-certificates-') as temporary:

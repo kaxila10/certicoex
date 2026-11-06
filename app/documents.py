@@ -15,7 +15,8 @@ from docx.oxml.ns import qn
 from docx.shared import Mm
 from PIL import Image
 
-FIELDS = {'NOMBRE', 'DNI/NIE', 'EMPRESA', 'CIF', 'HORAS', 'FECHA', 'TECNICO', 'FIRMA'}
+FIELDS = {'NOMBRE', 'DNI/NIE', 'EMPRESA', 'CIF', 'HORAS', 'FECHA', 'TECNICO', 'FIRMA',
+          'CARGO_TECNICO', 'TRATAMIENTO_TECNICO'}
 SIGNATURE_MARKER = 'certicoex_signature'
 _OFFICE_SLOT = BoundedSemaphore(1)
 

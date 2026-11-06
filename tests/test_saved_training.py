@@ -85,7 +85,7 @@ class SavedTraining(unittest.TestCase):
         (self.data/'signature.png').unlink();(self.data/'profile.json').unlink()
         shutil.rmtree(self.data/'templates')
         storage._open.cache_clear()
-        self.assertEqual(self.client.get('/api/profile').json(),{'name':'Técnico de prueba','has_signature':True})
+        self.assertEqual(self.client.get('/api/profile').json(),{'name':'Técnico de prueba','title':'','salutation':'','has_signature':True})
         self.assertEqual(self.client.get('/api/profile/signature').content,signature)
         self.assertTrue(main.template_path(self.template).is_file())
 

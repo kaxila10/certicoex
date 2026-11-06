@@ -14,6 +14,7 @@ from urllib.request import urlopen
 from docx import Document
 from PIL import Image, ImageDraw
 from playwright.sync_api import sync_playwright, expect
+from pypdf import PdfReader
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,15 +38,18 @@ def login(page, username, password=PASSWORD):
     page.wait_for_function("document.querySelector('#template').options.length > 1")
 
 
-def profile(page, name, signature):
+def profile(page, name, signature, title='TÉCNICO EN PRL', salutation='D.'):
     page.locator('#open-profile').click()
     page.locator('#technician-name').fill(name)
+    page.locator('#technician-title').fill(title)
+    page.locator('#technician-salutation').select_option(salutation)
     page.locator('#signature').set_input_files(signature)
     page.locator('#profile-form button[type=submit]').click()
     expect(page.locator('#profile-dialog')).not_to_be_visible()
 
 
 def emit(page):
+    page.locator('#template').select_option(label='Plantilla compartida adaptable')
     page.locator('#company').fill('Empresa compartida de prueba')
     page.locator('#cif').fill('B12345678')
     page.locator('#course-date').fill('2026-11-06')
@@ -81,6 +85,16 @@ with tempfile.TemporaryDirectory(prefix='certicoex-accounts-browser-') as direct
                 errors = []
                 for page in (owner, a, b): page.on('pageerror', lambda error: errors.append(str(error)))
                 login(owner, 'tecnico')
+                template = Document()
+                for text in ('CERTIFICADO DE PRUEBA', '{NOMBRE} · {DNI/NIE}',
+                             '{EMPRESA} · {CIF} · {HORAS} · {FECHA}', '{FIRMA}',
+                             '{CARGO_TECNICO}', '{TRATAMIENTO_TECNICO} {TECNICO}'):
+                    template.add_paragraph(text)
+                source = BytesIO(); template.save(source)
+                uploaded = admin_context.request.post(BASE + '/api/templates', multipart={
+                    'name': 'Plantilla compartida adaptable',
+                    'file': {'name': 'plantilla.docx', 'mimeType': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'buffer': source.getvalue()}})
+                assert uploaded.status == 200
                 assert owner.locator('.brand-logo').evaluate('(image) => image.complete && image.naturalWidth > 0')
                 assert owner.locator('link[rel=icon]').get_attribute('href').startswith('/logo.png')
                 owner.locator('#open-profile').click()
@@ -99,20 +113,33 @@ with tempfile.TemporaryDirectory(prefix='certicoex-accounts-browser-') as direct
                 expect(a.locator('#open-users')).to_be_hidden()
                 expect(a.locator('#archive-tools')).to_be_hidden()
                 assert a_context.request.get(BASE + '/api/users').status == 403
-                profile(a, 'Técnico Alfa', blue); profile(b, 'Técnico Beta', red)
+                profile(a, 'Técnico Alfa', blue)
+                profile(b, 'Técnico Beta', red, 'TÉCNICA SUPERIOR EN PRL', 'Dña.')
                 a.reload(); a.wait_for_function("document.querySelector('#template').options.length > 1")
                 a.locator('#open-profile').click()
                 expect(a.locator('#technician-name')).to_have_value('Técnico Alfa')
+                expect(a.locator('#technician-title')).to_have_value('TÉCNICO EN PRL')
+                expect(a.locator('#technician-salutation')).to_have_value('D.')
                 a.locator('[data-close=profile-dialog]').click()
+                b.reload(); b.wait_for_function("document.querySelector('#template').options.length > 1")
+                b.locator('#open-profile').click()
+                expect(b.locator('#technician-title')).to_have_value('TÉCNICA SUPERIOR EN PRL')
+                expect(b.locator('#technician-salutation')).to_have_value('Dña.')
+                b.locator('[data-close=profile-dialog]').click()
                 a_word, a_pdf = emit(a)
                 b.reload(); b.wait_for_function("document.querySelector('#template').options.length > 1")
                 expect(b.locator('#saved-company')).to_contain_text('Empresa compartida de prueba')
                 b_word, b_pdf = emit(b)
-                for context, word, own_name, other_name in ((a_context,a_word,'Técnico Alfa','Técnico Beta'),(b_context,b_word,'Técnico Beta','Técnico Alfa')):
+                for context, word, pdf, own_name, other_name, title, salutation in (
+                        (a_context,a_word,a_pdf,'Técnico Alfa','Técnico Beta','TÉCNICO EN PRL','D.'),
+                        (b_context,b_word,b_pdf,'Técnico Beta','Técnico Alfa','TÉCNICA SUPERIOR EN PRL','Dña.')):
                     response = context.request.get(BASE + word)
                     assert response.status == 200
                     text = '\n'.join(p.text for p in Document(BytesIO(response.body())).paragraphs)
                     assert own_name in text and other_name not in text
+                    assert title in text and f'{salutation} {own_name}' in text and '{' not in text
+                    pdf_text = '\n'.join(p.extract_text() for p in PdfReader(BytesIO(context.request.get(BASE + pdf).body())).pages)
+                    assert title in pdf_text and f'{salutation} {own_name}' in pdf_text
                 assert b_context.request.get(BASE + a_pdf).status == 404
                 b_context.request.delete(BASE + a_word.rsplit('/',1)[0])
                 assert a_context.request.get(BASE + a_pdf).status == 200

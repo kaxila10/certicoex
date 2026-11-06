@@ -12,7 +12,7 @@ from docx import Document
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from app import accounts, main
+from app import accounts, main, storage
 from app.temporary_jobs import temporary_jobs
 import test_workflow as fixtures
 
@@ -87,7 +87,7 @@ class Accounts(unittest.TestCase):
 
     def test_profiles_signatures_and_generated_certificates_are_isolated(self):
         a, _ = self.technician('tecnico-a'); b, _ = self.technician('tecnico-b')
-        self.assertEqual(a.get('/api/profile').json(), {'name': '', 'has_signature': False})
+        self.assertEqual(a.get('/api/profile').json(), {'name': '', 'title': '', 'salutation': '', 'has_signature': False})
         self.assertEqual(a.get('/api/profile/signature').status_code, 404)
         self.assertEqual(self.client.get('/api/profile').json()['name'], 'Técnico de prueba')
         signatures = [signature('red'), signature('blue')]
@@ -109,6 +109,45 @@ class Accounts(unittest.TestCase):
             self.assertEqual(other.delete('/api/files/' + key).status_code, 200)
             self.assertEqual(client.get(result['word']).status_code, 200)
         self.assertEqual(self.client.get('/api/profile').json()['name'], 'Técnico de prueba')
+
+    def test_shared_template_uses_each_accounts_title_and_salutation(self):
+        doc = Document(main.template_path(self.template))
+        cell = doc.add_table(rows=1, cols=1).cell(0, 0)
+        p = cell.paragraphs[0]
+        p.add_run('{CARGO_').bold = True
+        p.add_run('TECNICO}')
+        cell.add_paragraph('{TRATAMIENTO_TECNICO} {TECNICO}')
+        doc.sections[0].footer.paragraphs[0].text = '{CARGO_TECNICO}'
+        source = BytesIO(); doc.save(source)
+        uploaded = self.client.post('/api/templates', data={'name': 'Plantilla compartida'},
+                                    files={'file': ('plantilla.docx', source.getvalue())})
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        self.assertIn('CARGO_TECNICO', uploaded.json()['fields'])
+        payload = self.batch(); payload['template_id'] = uploaded.json()['id']
+        a, _ = self.technician('tecnico-a'); b, _ = self.technician('tecnico-b')
+        for client, name, title, salutation in ((a, 'Persona Alfa', 'TÉCNICO EN PRL', 'D.'),
+                                                (b, 'Persona Beta', 'TÉCNICA SUPERIOR EN PRL', 'Dña.')):
+            saved = client.post('/api/profile', data={'name': name, 'title': title, 'salutation': salutation},
+                                files={'signature': ('firma.png', signature('blue'), 'image/png')})
+            self.assertEqual(saved.status_code, 200, saved.text)
+            # Older clients can still save a name without erasing new fields or the signature.
+            self.assertEqual(client.post('/api/profile', data={'name': name}).status_code, 200)
+            storage._open.cache_clear()
+            current = client.get('/api/profile').json()
+            self.assertEqual((current['title'], current['salutation']), (title, salutation))
+            self.assertTrue(current['has_signature'])
+            with patch('app.main.convert_pdf', side_effect=RuntimeError('Sin PDF para esta prueba')):
+                generated = client.post('/api/generate', json=payload)
+            self.assertEqual(generated.status_code, 200, generated.text)
+            result = Document(BytesIO(client.get(generated.json()['word']).content))
+            from app.documents import paragraph_text, paragraphs
+            text = '\n'.join(paragraph_text(p) for p in paragraphs(result.element))
+            self.assertIn(title, text); self.assertIn(f'{salutation} {name}', text)
+            self.assertNotIn('{', text)
+            self.assertEqual(result.sections[0].footer.paragraphs[0].text, title)
+        self.assertEqual(a.get('/api/profile').json()['salutation'], 'D.')
+        self.assertEqual(b.get('/api/profile').json()['salutation'], 'Dña.')
+        self.assertEqual(self.client.get('/api/profile').json()['title'], '')
 
     def test_templates_companies_shared_and_management_restricted(self):
         a, actor = self.technician('tecnico-a'); b, _ = self.technician('tecnico-b')

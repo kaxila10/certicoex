@@ -114,6 +114,25 @@ class Workflow(unittest.TestCase):
         response=self.client.post('/api/import/paste',json={'text':'Ana;12345678Z'},headers={'Origin':'https://otro.example'})
         self.assertEqual(response.status_code,403)
 
+    def test_new_markers_require_profile_fields_and_reject_invalid_values(self):
+        doc = Document(main.template_path(self.template))
+        doc.add_paragraph('{CARGO_TECNICO}')
+        doc.add_paragraph('{TRATAMIENTO_TECNICO} {TECNICO}')
+        source = BytesIO(); doc.save(source)
+        uploaded = self.client.post('/api/templates', data={'name': 'Curso adaptable'},
+                                    files={'file': ('plantilla.docx', source.getvalue())})
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        payload = self.batch(); payload['template_id'] = uploaded.json()['id']
+        missing = self.client.post('/api/generate', json=payload)
+        self.assertEqual(missing.status_code, 422)
+        self.assertIn('cargo y tratamiento', missing.text)
+        for values in ({'title': 'x' * 121}, {'title': 'Dos\nlíneas'}, {'salutation': 'Otro'}):
+            self.assertEqual(self.client.post('/api/profile', data={'name': 'Nombre', **values}).status_code, 422)
+        self.assertEqual(self.client.get('/api/profile').json()['name'], 'Técnico de prueba')
+        # Original templates remain usable by profiles created before the new fields existed.
+        with patch('app.main.convert_pdf', side_effect=RuntimeError('Sin PDF para esta prueba')):
+            self.assertEqual(self.client.post('/api/generate', json=self.batch()).status_code, 200)
+
     def test_word_available_when_converter_unavailable(self):
         with patch('app.main.convert_pdf',side_effect=RuntimeError('Falta LibreOffice')):
             response=self.client.post('/api/generate',json=self.batch())
@@ -123,8 +142,18 @@ class Workflow(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get('CERTICOEX_TEST_PDF') == '1', 'Activar con CERTICOEX_TEST_PDF=1')
     def test_real_pdf_and_preview(self):
+        doc = Document(main.template_path(self.template))
+        doc.add_paragraph('{CARGO_TECNICO}')
+        doc.add_paragraph('{TRATAMIENTO_TECNICO} {TECNICO}')
+        source = BytesIO(); doc.save(source)
+        uploaded = self.client.post('/api/templates', data={'name': 'Curso adaptable'},
+                                    files={'file': ('plantilla.docx', source.getvalue())}).json()
+        saved = self.client.post('/api/profile', data={'name': 'Persona de Prueba',
+                                 'title': 'TÉCNICA SUPERIOR EN PRL', 'salutation': 'Dña.'})
+        self.assertEqual(saved.status_code, 200, saved.text)
         for preview in (False, True):
             batch=self.batch();batch['preview']=preview
+            batch['template_id'] = uploaded['id']
             response=self.client.post('/api/generate',json=batch)
             self.assertEqual(response.status_code,200,response.text)
             result=response.json();self.assertIsNotNone(result['pdf'], result)
@@ -137,6 +166,8 @@ class Workflow(unittest.TestCase):
             self.assertIn('Luis Pérez Martín',text)
             for page in reader.pages:
                 self.assertRegex(page.extract_text(),r'1\.\s+Tema de prueba')
+                self.assertIn('TÉCNICA SUPERIOR EN PRL', page.extract_text())
+                self.assertIn('Dña. Persona de Prueba', page.extract_text())
 
 
 if __name__ == '__main__':

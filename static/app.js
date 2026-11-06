@@ -56,6 +56,8 @@ function summary() {
 }
 function updateProfile() {
   $('technician-name').value = profile.name || '';
+  $('technician-title').value = profile.title || '';
+  $('technician-salutation').value = profile.salutation || '';
   $('signature-preview').hidden = !profile.has_signature;
   if (profile.has_signature) $('signature-preview').src = '/api/profile/signature?v=' + Date.now();
   const ready = profile.name && profile.has_signature;
@@ -231,6 +233,10 @@ function setTab(selected) {
 function payload(preview) {
   if (!$('course-form').reportValidity()) return null;
   if (!profile.name || !profile.has_signature) { $('profile-dialog').showModal(); toast('Guarda tu nombre y firma antes de generar.'); return null; }
+  const fields = templates.find(t => t.id === $('template').value)?.fields || [];
+  if ((fields.includes('CARGO_TECNICO') && !profile.title) || (fields.includes('TRATAMIENTO_TECNICO') && !profile.salutation)) {
+    $('profile-dialog').showModal(); toast('Completa tu cargo y tratamiento en Mi perfil para utilizar esta plantilla.'); return null;
+  }
   if (!students.length) throw new Error('Añade al menos un alumno.');
   if (!validateStudents()) throw new Error('Corrige los datos incompletos o repetidos del listado.');
   return {template_id:$('template').value, company:$('company').value.trim(), cif:$('cif').value.trim(), hours:Number($('hours').value), course_date:$('course-date').value, students, preview};
@@ -285,6 +291,8 @@ $('open-template').onclick = () => $('template-dialog').showModal();
 document.querySelectorAll('[data-close]').forEach(button => button.onclick = () => $(button.dataset.close).close());
 $('profile-form').onsubmit = event => { event.preventDefault(); run(async () => {
   const data = new FormData(); data.append('name', $('technician-name').value);
+  data.append('title', $('technician-title').value);
+  data.append('salutation', $('technician-salutation').value);
   if ($('signature').files[0]) data.append('signature', $('signature').files[0]);
   profile = await api('/api/profile', {method:'POST', body:data}); updateProfile(); dirty();
   $('signature').value = ''; $('profile-dialog').close(); toast('Perfil del técnico guardado.');

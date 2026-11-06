@@ -41,7 +41,11 @@ Sube un `.docx` desde «Añadir plantilla», con estos campos, respetando las ll
 | `{EMPRESA}` / `{CIF}` | Empresa que recibe la formación |
 | `{HORAS}` / `{FECHA}` | Duración y fecha de formación |
 | `{TECNICO}` | Nombre del perfil |
+| `{CARGO_TECNICO}` | Cargo del perfil, por ejemplo TÉCNICO EN PRL o TÉCNICA SUPERIOR EN PRL |
+| `{TRATAMIENTO_TECNICO}` | Tratamiento elegido en el perfil: D. o Dña. |
 | `{FIRMA}` | Imagen de firma; colocar en un párrafo propio |
+
+Cada técnico configura su cargo y tratamiento en «Mi perfil». Para compartir el Word, usa `{CARGO_TECNICO}` en la línea del cargo y `{TRATAMIENTO_TECNICO} {TECNICO}` en la línea del nombre. Ambos marcadores nuevos son opcionales: las plantillas anteriores siguen funcionando. Si una plantilla los utiliza, se pide completar los campos correspondientes antes de generar. Cambiar el nombre o cargo del perfil conserva la firma ya guardada.
 
 Los campos del alumno y la firma deben estar en el cuerpo, fuera de cabeceras y pies. Retira nombres y firmas fijos de otras personas. El título, temario, logotipos y estructura vienen del Word. La firma en imagen no es una firma electrónica con certificado digital. Se usa un curso y una empresa por lote.
 
