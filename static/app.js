@@ -104,7 +104,7 @@ async function api(url, options = {}) {
   return data;
 }
 function run(task) { return task().catch(error => toast(error.message)); }
-function dirty() { revision++; if (currentDraftId) $('draft-status').textContent = 'Cambios sin guardar'; $('downloads').hidden = true; $('generation-status').textContent = ''; }
+function dirty() { revision++; if (currentDraftId) $('draft-status').textContent = 'Cambios sin guardar'; $('downloads').hidden = true; $('layout-report').hidden = true; $('preview-layout-report').hidden = true; $('generation-status').textContent = ''; }
 function summary() {
   $('summary-count').textContent = `${students.length} ${students.length === 1 ? 'alumno' : 'alumnos'}`;
   $('student-count').textContent = students.length;
@@ -115,7 +115,18 @@ function updateReviewSummary() {
   $('review-summary').textContent = imported ? 'Hay un listado pendiente de añadir.' : !students.length ? 'Añade los alumnos para empezar.' : count ? `${count} ${count === 1 ? 'pendiente' : 'pendientes'} de revisar` : 'Datos completos · sin avisos';
   $('review-dot').classList.toggle('ready', !!students.length && !count && !imported);
   $('review-dot').classList.toggle('warning', !!count || !!imported);
+  $('review-summary').disabled = !imported && !count;
+  $('review-summary').title = imported ? 'Ir al listado pendiente de añadir' : count ? 'Ir al primer alumno con avisos' : '';
 }
+$('review-summary').onclick = () => {
+  const root = imported ? $('import-rows') : $('student-rows');
+  const row = [...root.children].find(row => row.dataset.needsReview === 'true');
+  const target = row?.querySelector('input.invalid, input.input-warning') || (imported ? $('apply-import') : null);
+  if (!target) return;
+  target.scrollIntoView({block:'center',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+  target.focus({preventScroll:true});
+  if (row) { row.classList.add('review-highlight'); setTimeout(() => row.classList.remove('review-highlight'),1800); }
+};
 function updateProfile() {
   $('technician-name').value = profile.name || '';
   $('technician-title').value = profile.title || '';
@@ -159,6 +170,7 @@ function validateRows(list, body, status, existing = []) {
     if (!emptyDni && !standard) unusual++;
     if (badLetter) wrongLetter++;
     const needsReview = emptyName || emptyDni || repeated || !standard || badLetter;
+    row.dataset.needsReview = String(!!needsReview);
     if (needsReview) reviewCount++;
     const state = row.querySelector('.row-status');
     if (state) {
@@ -329,15 +341,16 @@ async function generate(preview) {
   busy = true; const startedAt = revision;
   ['preview', 'generate', 'clear-temporary'].forEach(id => $(id).disabled = true);
   $('downloads').hidden = true;
+  $('layout-report').hidden = true; $('preview-layout-report').hidden = true;
   $('generation-status').textContent = preview ? 'Preparando la vista previa…' : `Generando ${students.length} certificados. El PDF puede tardar unos instantes…`;
   try {
     const result = await api('/api/generate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
     if (result.temporary_minutes) temporaryKeys.add(result.word.split('/')[3]);
     if (!preview) { await loadCompanies(); const entry = companies.find(c => cleanDni(c.cif) === cleanDni(data.cif)); if (entry) showCompanies(entry.id); try { localStorage.setItem(COMPANY_KEY,JSON.stringify(companies)); } catch {} }
     if (startedAt !== revision) { $('generation-status').textContent = 'Los datos cambiaron durante la generación. Vuelve a generar para usar los datos actuales.'; return; }
+    showLayoutReport(result);
     if (preview && result.pdf) {
-      $('pdf-preview').src = result.pdf + '?inline=true'; $('preview-word').href = result.word;
-      $('preview-dialog').showModal(); $('generation-status').textContent = 'Vista previa de todos los alumnos preparada.';
+      openPdfPreview(result); $('generation-status').textContent = 'Vista previa de todos los alumnos preparada.';
     } else {
       $('download-word').href = result.word; $('download-pdf').hidden = !result.pdf;
       if (result.pdf) $('download-pdf').href = result.pdf;
@@ -345,10 +358,35 @@ async function generate(preview) {
       $('result-info').textContent = `${result.count} certificado(s)${result.pages ? ` · ${result.pages} página(s) en el PDF` : ''}. ${retention}`;
       $('downloads').querySelector('h3').textContent = preview ? 'Prueba en Word disponible' : 'Tu lote está listo';
       $('downloads').hidden = false;
-      $('generation-status').textContent = result.warning || 'Documentos generados correctamente.';
+      $('generation-status').textContent = result.warning || (result.layout?.warnings?.length ? 'Documentos generados. Hay avisos de maquetación para revisar.' : 'Documentos generados correctamente.');
     }
     if (result.warning) toast(result.warning);
   } finally { busy = false; ['preview', 'generate', 'clear-temporary'].forEach(id => $(id).disabled = false); }
+}
+
+function openPdfPreview(result, page = 1) {
+  $('pdf-preview').src = `${result.pdf}?inline=true#page=${page}`; $('preview-word').href = result.word;
+  if (!$('preview-dialog').open) $('preview-dialog').showModal();
+}
+function showLayoutReport(result) {
+  const report = result.layout;
+  ['layout-report','preview-layout-report'].forEach(id => {
+    const box = $(id); box.replaceChildren(); box.hidden = !report?.warnings?.length;
+    if (box.hidden) return;
+    const title = document.createElement('h3'); title.textContent = 'Revisar maquetación del PDF'; box.append(title);
+    const list = document.createElement('ul');
+    report.warnings.forEach(issue => {
+      const row = document.createElement('li'); row.textContent = issue.message;
+      if (result.pdf && issue.page) {
+        const link = action(`Ver página ${issue.page}`, async () => openPdfPreview(result,issue.page));
+        link.className = 'text-button'; row.append(link);
+      }
+      list.append(row);
+    });
+    const note = document.createElement('small');
+    note.textContent = 'Comprobación orientativa. Revisa visualmente las firmas y los saltos de página.' + (report.geometry_checked ? '' : ' No se ha podido comprobar la posición del texto.');
+    box.append(list,note);
+  });
 }
 
 $('clear-temporary').onclick = () => run(async () => {
@@ -527,11 +565,12 @@ $('reset-password-form').onsubmit = event => { event.preventDefault(); run(async
 $('template').addEventListener('change', () => { $('hours').value = templates.find(t => t.id === $('template').value)?.hours ?? ''; dirty(); });
 function editCourse(course) {
   editingCourseId = course.id; $('course-name').value = course.name; $('default-hours').value = course.hours ?? '';
+  $('expected-pages').value = course.expected_pages || 1;
   $('templates-dialog').close(); $('course-dialog').showModal();
 }
 $('course-settings-form').onsubmit = event => { event.preventDefault(); run(async () => {
   const id = editingCourseId, selected = $('template').value;
-  await api(`/api/templates/${id}/settings`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('course-name').value,hours:$('default-hours').value ? Number($('default-hours').value) : null})});
+  await api(`/api/templates/${id}/settings`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('course-name').value,hours:$('default-hours').value ? Number($('default-hours').value) : null,expected_pages:Number($('expected-pages').value)})});
   await loadTemplates(selected);
   if (selected === id) { $('hours').value = templates.find(t => t.id === id)?.hours ?? ''; dirty(); }
   $('course-dialog').close(); await showTemplates(); toast('Curso y duración habitual guardados.');
@@ -580,6 +619,17 @@ async function showTemplates() {
       dirty(); summary(); $('templates-dialog').close();
     }), action('Editar curso', async () => editCourse(template)), download);
     if (signedInUser?.role === 'admin') {
+      actions.append(action('Sustituir Word', async () => {
+        $('replace-template-form').reset(); $('replace-template-id').value = template.id; $('replace-template-version').value = template.version || 0;
+        $('replace-course-name').textContent = template.name; $('replace-current-file').textContent = template.filename || 'Nombre original no registrado';
+        $('templates-dialog').close(); $('replace-template-dialog').showModal();
+      }));
+      if (template.has_previous) actions.append(action('Recuperar anterior', async () => {
+        if (!confirm(`¿Recuperar el Word anterior de «${template.name}» para todos los técnicos? Se conservarán los ajustes del curso.`)) return;
+        await api(`/api/templates/${template.id}/restore`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:template.version || 0})});
+        if ($('template').value === template.id) dirty();
+        await showTemplates(); toast('Word anterior recuperado.');
+      }));
       const remove = action('Eliminar', async () => {
         if (!confirm(`¿Eliminar la plantilla «${template.name}» para todos los técnicos? Se borrará el Word guardado. Esta acción no se puede deshacer.`)) return;
         remove.disabled = true;
@@ -599,6 +649,19 @@ async function showTemplates() {
 }
 $('open-templates').onclick = () => run(showTemplates);
 $('add-template-from-list').onclick = () => { $('templates-dialog').close(); $('template-dialog').showModal(); };
+$('cancel-replace-template').onclick = () => run(async () => { $('replace-template-dialog').close(); await showTemplates(); });
+$('replace-template-dialog').addEventListener('cancel', event => { if ($('replace-template-save').disabled) event.preventDefault(); });
+$('replace-template-form').onsubmit = event => { event.preventDefault(); run(async () => {
+  const id = $('replace-template-id').value, data = new FormData();
+  data.append('file',$('replace-template-file').files[0]); data.append('version',$('replace-template-version').value);
+  const controls = [$('replace-template-save'),$('replace-template-file'),$('cancel-replace-template'),$('replace-template-dialog').querySelector('.close')];
+  controls.forEach(control => control.disabled = true);
+  try {
+    await api(`/api/templates/${id}/file`,{method:'PUT',body:data});
+    if ($('template').value === id) dirty();
+    $('replace-template-dialog').close(); await showTemplates(); toast('Word sustituido. Se conservan el curso y sus ajustes.');
+  } finally { controls.forEach(control => control.disabled = false); }
+}); };
 async function loadDrafts() {
   const records = await api('/api/drafts'); $('draft-list').replaceChildren();
   if (!records.length) $('draft-list').textContent = 'Todavía no tienes borradores.';

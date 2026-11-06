@@ -40,6 +40,12 @@ El menú superior «Plantillas» muestra todos los cursos guardados y su archivo
 
 El administrador puede pulsar «Eliminar» en cada plantilla y confirmar el borrado para todo el departamento. Se eliminan el registro, el Word y sus copias en la caché local; las empresas, los perfiles y los certificados ya generados se conservan. La acción no tiene deshacer: descarga primero el Word si quieres guardar una copia. En el modo local de perfil único también está disponible.
 
+«Sustituir Word», disponible para el administrador, cambia el archivo conservando el identificador, nombre, horas y páginas previstas del curso. Se valida el Word antes de guardarlo y se conserva una única copia anterior. «Recuperar anterior» intercambia ambos Word sin cambiar los ajustes. El borrado definitivo de una plantilla también elimina esa copia. Las sustituciones simultáneas se controlan por versión; si otra pestaña cambió el Word, se pide volver a abrir el catálogo. Las generaciones en curso utilizan una copia consistente de su plantilla.
+
+El resumen de alumnos pendientes es un botón: lleva al primer campo vacío, duplicado o con aviso de DNI/NIE. Si hay una importación pendiente, lleva a su tabla o al botón para añadirla.
+
+Al generar o previsualizar un PDF se comprueba su maquetación localmente: número de páginas frente al previsto, páginas sin contenido del certificado o con solo cabecera/pie, posibles bloques de firma aislados y texto fuera de página. Los avisos permiten abrir la página correspondiente y no bloquean la descarga. «Plantillas → Editar curso → Páginas previstas por alumno» permite indicar más de una página; el valor inicial es 1. Es una comprobación orientativa: las firmas, los solapamientos y los saltos de página requieren revisión visual. Se utiliza Poppler si está disponible; en su ausencia la revisión geométrica se indica como no disponible. No se guardan textos de trabajadores en el informe ni se envían a servicios externos.
+
 Sube un `.docx` desde «Añadir plantilla», con estos campos, respetando las llaves:
 
 | Campo | Contenido |

@@ -15,19 +15,21 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from openpyxl import load_workbook
 from PIL import Image, UnidentifiedImageError
+from lxml.etree import XMLSyntaxError
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 from .documents import check_zip, convert_pdf, inspect_template, office_binary, render_batch
 from .access import authorized, configured
 from .defaults import seed_templates
-from .storage import open_store, StorageUnavailable
+from .storage import open_store, StorageUnavailable, TemplateConflict
 from .validation import review_students
 from .naming import clean_part, document_name, disposition
 from .rosters import parse_text, tabular
 from .roster_files import extract_list
 from .temporary_jobs import temporary_jobs, LIFETIME_SECONDS
 from . import accounts
+from .layout import inspect_layout
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = Path(os.environ.get('CERTICOEX_DATA', ROOT / '.local/data'))
@@ -285,12 +287,60 @@ def templates():
 
 @app.get('/api/templates/{key}/file')
 def download_template(key: str):
-    path = template_path(key)
-    meta = open_store(DATA).get('template', key, {})
+    meta, content = open_store(DATA).template_snapshot(key)
+    if meta is None:
+        raise HTTPException(404, 'Plantilla no encontrada.')
     name = Path(meta['filename']).stem if meta.get('filename') else meta.get('name', 'Plantilla')
     name = clean_part(name, 200, 'Plantilla')
-    return FileResponse(path, media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    return Response(content, media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
                         headers={'Content-Disposition': disposition(name, 'docx')})
+
+
+def invalidate_template_cache(key):
+    for suffix in ('.docx', '.json'):
+        (DATA / 'templates' / (key + suffix)).unlink(missing_ok=True)
+
+
+def replace_saved_template(key, content, fields, filename, version, restore=False):
+    if not re.fullmatch(r'[a-f0-9]{32}', key):
+        raise HTTPException(404, 'Plantilla no encontrada.')
+    try:
+        meta = open_store(DATA).replace_template(key, content, fields, filename, version, restore)
+    except TemplateConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if meta is None:
+        raise HTTPException(404, 'No se encuentra la plantilla o su copia anterior.')
+    invalidate_template_cache(key)
+    return meta
+
+
+@app.put('/api/templates/{key}/file')
+def replace_template(key: str, request: Request, file: UploadFile = File(...), version: int = Form(..., ge=0)):
+    if accounts.enabled():
+        admin(request)
+    if not (file.filename or '').lower().endswith('.docx'):
+        raise ValueError('Sube una plantilla Word .docx.')
+    content = file.file.read(10_000_001)
+    if len(content) > 10_000_000:
+        raise ValueError('La plantilla supera 10 MB.')
+    try:
+        fields = inspect_template(content)
+    except (KeyError, TypeError, XMLSyntaxError) as exc:
+        raise ValueError('No se puede leer esta plantilla Word.') from exc
+    original = file.filename.replace('\\', '/').rsplit('/', 1)[-1]
+    filename = clean_part(Path(original).stem, 200, 'Plantilla') + '.docx'
+    return replace_saved_template(key, content, fields, filename, version)
+
+
+class TemplateVersion(BaseModel):
+    version: int = Field(ge=0)
+
+
+@app.post('/api/templates/{key}/restore')
+def restore_template(key: str, request: Request, payload: TemplateVersion):
+    if accounts.enabled():
+        admin(request)
+    return replace_saved_template(key, None, None, None, payload.version, restore=True)
 
 
 @app.delete('/api/templates/{key}')
@@ -314,7 +364,7 @@ def upload_template(file: UploadFile = File(...), name: str = Form(...)):
         raise ValueError('La plantilla supera 10 MB.')
     try:
         return store_template(data, name, file.filename)
-    except (KeyError, TypeError) as exc:
+    except (KeyError, TypeError, XMLSyntaxError) as exc:
         raise ValueError('No se puede leer esta plantilla Word.') from exc
 
 
@@ -431,6 +481,7 @@ def migrate_companies(payload: list[Company]):
 class CourseSettings(BaseModel):
     name: str = Field(min_length=1,max_length=120)
     hours: float | None = Field(default=None,gt=0,le=1000,allow_inf_nan=False)
+    expected_pages: int | None = Field(default=None, ge=1, le=20)
 
 
 @app.put('/api/templates/{key}/settings')
@@ -440,6 +491,8 @@ def course_settings(key: str, payload: CourseSettings):
     if not meta: raise HTTPException(404,'Curso no encontrado.')
     if not payload.name.strip(): raise ValueError('Introduce un nombre para el curso.')
     meta.update(name=payload.name.strip(),hours=payload.hours)
+    if payload.expected_pages is not None:
+        meta['expected_pages'] = payload.expected_pages
     updated = db.update_template(key, meta)
     if updated is None:
         raise HTTPException(404, 'Curso no encontrado.')
@@ -604,12 +657,15 @@ def clean_jobs():
 
 @app.post('/api/generate')
 def generate(payload: Batch, request: Request):
-    template = template_path(payload.template_id)
+    meta, content = open_store(DATA).template_snapshot(payload.template_id)
+    if meta is None:
+        raise HTTPException(404, 'Plantilla no encontrada.')
+    template = BytesIO(content)
     user_id = request.state.user['id']
     current = user_profile(user_id)
     if not current['name'] or not current['has_signature']:
         raise ValueError('Guarda tu nombre y una imagen de firma en el perfil del técnico.')
-    fields = open_store(DATA).get('template', payload.template_id, {}).get('fields', [])
+    fields = meta.get('fields', [])
     if (('CARGO_TECNICO' in fields and not current['title']) or
             ('TRATAMIENTO_TECNICO' in fields and not current['salutation'])):
         raise ValueError('Completa tu cargo y tratamiento en Mi perfil para utilizar esta plantilla.')
@@ -620,7 +676,7 @@ def generate(payload: Batch, request: Request):
             raise ValueError('Hay documentos de identidad repetidos. Corrige el listado antes de generar.')
         seen.add(dni)
     if not retains_students():
-        return generate_temporary(payload, template, current, user_id)
+        return generate_temporary(payload, template, current, user_id, meta)
     clean_jobs()
     key = uuid.uuid4().hex
     folder = DATA / 'jobs' / key
@@ -631,13 +687,13 @@ def generate(payload: Batch, request: Request):
     students = [s.model_dump() for s in payload.students]
     output = folder / 'certificados.docx'
     db=open_store(DATA)
-    meta=db.get('template',payload.template_id,{})
     filename=document_name(meta.get('name','Curso'),payload.company,d)
     render_batch(template, students, common, profile_signature(db, user_id), output)
     result = {'word': f'/api/files/{key}/docx', 'count': len(students), 'pdf': None, 'pages': None, 'filename':filename}
     try:
-        _, pages = convert_pdf(output, folder)
+        pdf, pages = convert_pdf(output, folder)
         result.update(pdf=f'/api/files/{key}/pdf', pages=pages)
+        result['layout'] = inspect_layout(pdf, output, len(students), meta.get('expected_pages', 1), common)
     except RuntimeError as exc:
         result['warning'] = str(exc)
     assets={}
@@ -662,10 +718,9 @@ def technician_fields(current):
             'TRATAMIENTO_TECNICO': current['salutation']}
 
 
-def generate_temporary(payload, template, current, user_id):
+def generate_temporary(payload, template, current, user_id, meta):
     key = uuid.uuid4().hex
     db = open_store(DATA)
-    meta = db.get('template', payload.template_id, {})
     filename = document_name(meta.get('name', 'Curso'), payload.company, payload.course_date)
     d = payload.course_date
     common = {'EMPRESA': payload.company, 'CIF': payload.cif, 'HORAS': f'{payload.hours:g}',
@@ -681,6 +736,7 @@ def generate_temporary(payload, template, current, user_id):
             pdf, pages = convert_pdf(output, folder)
             files['pdf'] = pdf.read_bytes()
             result.update(pdf=f'/api/files/{key}/pdf', pages=pages)
+            result['layout'] = inspect_layout(pdf, output, len(payload.students), meta.get('expected_pages', 1), common)
         except RuntimeError as exc:
             result['warning'] = str(exc)
     # No student metadata, certificates or previews are written to the database.

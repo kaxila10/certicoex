@@ -14,6 +14,10 @@ class StorageUnavailable(Exception):
     pass
 
 
+class TemplateConflict(Exception):
+    pass
+
+
 class Store:
     def __init__(self, folder, url=''):
         self.folder = Path(folder)
@@ -88,13 +92,65 @@ class Store:
         with self.connection() as db:
             db.execute(self.sql('DELETE FROM records WHERE kind=? AND id=?'), ('template', key))
             db.execute(self.sql('DELETE FROM assets WHERE id=?'), ('templates/' + key,))
+            db.execute(self.sql('DELETE FROM assets WHERE id=?'), ('templates/' + key + '/previous',))
+
+    def template_snapshot(self, key):
+        with self.connection() as db:
+            row = db.execute(self.sql('SELECT r.payload,a.content FROM records r JOIN assets a ON a.id=? WHERE r.kind=? AND r.id=?'),
+                             ('templates/' + key, 'template', key)).fetchone()
+        return (json.loads(row[0]), bytes(row[1])) if row else (None, None)
+
+    def _locked_template(self, db, key):
+        if not self.url:
+            db.execute('BEGIN IMMEDIATE')
+        query = 'SELECT payload FROM records WHERE kind=? AND id=?' + (' FOR UPDATE' if self.url else '')
+        row = db.execute(self.sql(query), ('template', key)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def replace_template(self, key, content, fields, filename, version, restore=False):
+        with self.connection() as db:
+            meta = self._locked_template(db, key)
+            if meta is None:
+                return None
+            if meta.get('version', 0) != version:
+                raise TemplateConflict('La plantilla ha cambiado. Vuelve a abrir Plantillas antes de sustituirla.')
+            current = db.execute(self.sql('SELECT content FROM assets WHERE id=?'), ('templates/' + key,)).fetchone()
+            if current is None:
+                return None
+            if restore:
+                previous = db.execute(self.sql('SELECT content FROM assets WHERE id=?'), ('templates/' + key + '/previous',)).fetchone()
+                if previous is None:
+                    return None
+                content = bytes(previous[0])
+                filename = meta.get('previous_filename')
+                fields = meta['previous_fields']
+            previous_filename, previous_fields = meta.get('filename'), meta['fields']
+            upsert = self.sql('INSERT INTO assets(id,content) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET content=excluded.content')
+            db.execute(upsert, ('templates/' + key + '/previous', bytes(current[0])))
+            db.execute(upsert, ('templates/' + key, content))
+            meta.update(fields=fields, version=version + 1, has_previous=True,
+                        previous_filename=previous_filename, previous_fields=previous_fields,
+                        replaced_at=datetime.now(timezone.utc).isoformat())
+            if filename:
+                meta['filename'] = filename
+            else:
+                meta.pop('filename', None)
+            db.execute(self.sql('UPDATE records SET payload=?,modified=? WHERE kind=? AND id=?'),
+                       (json.dumps(meta, ensure_ascii=False), meta['replaced_at'], 'template', key))
+            return meta
 
     def update_template(self, key, value):
         # An edit racing with deletion must not recreate a deleted template.
         with self.connection() as db:
-            changed = db.execute(self.sql('UPDATE records SET payload=?,modified=? WHERE kind=? AND id=?'),
-                                 (json.dumps(value, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), 'template', key))
-            return value if changed.rowcount else None
+            current = self._locked_template(db, key)
+            if current is None:
+                return None
+            for field in ('name', 'hours', 'expected_pages'):
+                if field in value:
+                    current[field] = value[field]
+            db.execute(self.sql('UPDATE records SET payload=?,modified=? WHERE kind=? AND id=?'),
+                       (json.dumps(current, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), 'template', key))
+            return current
 
     def asset(self, key):
         with self.connection() as db:

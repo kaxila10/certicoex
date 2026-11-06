@@ -163,7 +163,7 @@ def put_signature(doc, signature):
             Paragraph(p, doc).add_run().add_picture(BytesIO(signature), width=Mm(35))
 
 
-def render_batch(template: Path, students, common, signature: bytes, output: Path):
+def render_batch(template: Path | BytesIO, students, common, signature: bytes, output: Path):
     doc = Document(template)
     put_signature(doc, signature)
     for root in document_roots(doc)[1:]:

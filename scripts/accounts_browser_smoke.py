@@ -1,6 +1,7 @@
 """Exercise department accounts in real browsers, with temporary fictitious data."""
 from io import BytesIO
 import json
+import re
 import os
 from pathlib import Path
 import shutil
@@ -115,6 +116,30 @@ with tempfile.TemporaryDirectory(prefix='certicoex-accounts-browser-') as direct
                     'name': 'Plantilla compartida adaptable',
                     'file': {'name': 'plantilla.docx', 'mimeType': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'buffer': source.getvalue()}})
                 assert uploaded.status == 200
+                template_id = uploaded.json()['id']
+                settings = admin_context.request.put(BASE + f'/api/templates/{template_id}/settings', data={'name':'Plantilla compartida adaptable','hours':8,'expected_pages':1})
+                assert settings.status == 200
+                modified = Document(BytesIO(source.getvalue())); modified.add_paragraph('WORD ACTUALIZADO DE PRUEBA')
+                modified.add_page_break(); modified.add_paragraph('')
+                replacement = BytesIO(); modified.save(replacement)
+                owner.locator('#open-templates').click()
+                template_card = owner.locator('#templates-list .saved-training').filter(has=owner.locator('h3',has_text='Plantilla compartida adaptable'))
+                template_card.get_by_role('button',name='Sustituir Word',exact=True).click()
+                expect(owner.locator('#replace-template-dialog')).to_be_visible()
+                owner.locator('#replace-template-file').set_input_files({'name':'revision.docx','mimeType':'application/vnd.openxmlformats-officedocument.wordprocessingml.document','buffer':replacement.getvalue()})
+                owner.locator('#replace-template-save').click()
+                expect(owner.locator('#templates-dialog')).to_be_visible()
+                expect(template_card).to_contain_text('revision.docx')
+                expect(template_card.get_by_role('button',name='Recuperar anterior')).to_be_visible()
+                saved = admin_context.request.get(BASE + '/api/templates').json()
+                updated = next(t for t in saved if t['id']==template_id)
+                assert updated['hours']==8 and updated['expected_pages']==1 and updated['version']==1
+                assert admin_context.request.get(BASE + f'/api/templates/{template_id}/file').body()==replacement.getvalue()
+                owner.once('dialog',lambda dialog:dialog.accept())
+                template_card.get_by_role('button',name='Recuperar anterior').click()
+                expect(template_card).to_contain_text('plantilla.docx')
+                assert admin_context.request.get(BASE + f'/api/templates/{template_id}/file').body()==source.getvalue()
+                owner.locator('[data-close=templates-dialog]').click()
                 assert owner.locator('.brand-logo').evaluate('(image) => image.complete && image.naturalWidth > 0')
                 assert owner.locator('link[rel=icon]').get_attribute('href').startswith('/logo.png')
                 owner.locator('#open-profile').click()
@@ -135,6 +160,8 @@ with tempfile.TemporaryDirectory(prefix='certicoex-accounts-browser-') as direct
                 expect(a.locator('#templates-dialog')).to_be_visible()
                 expect(a.locator('#hours')).to_have_value('5')
                 expect(a.locator('#templates-list').get_by_role('button', name='Eliminar', exact=True)).to_have_count(0)
+                expect(a.locator('#templates-list').get_by_role('button', name='Sustituir Word', exact=True)).to_have_count(0)
+                expect(a.locator('#templates-list').get_by_role('button', name='Recuperar anterior', exact=True)).to_have_count(0)
                 card = a.locator('#templates-list .saved-training').filter(has=a.locator('h3', has_text='Plantilla compartida adaptable'))
                 expect(card).to_contain_text('Archivo Word: plantilla.docx')
                 with a.expect_download() as saved:
@@ -257,6 +284,8 @@ with tempfile.TemporaryDirectory(prefix='certicoex-accounts-browser-') as direct
                     a.locator('#student-rows tr').last.locator('input').last.fill(dni)
                 expect(a.locator('#student-rows .row-status').last).to_have_text('Revisar DNI')
                 expect(a.locator('#review-summary')).to_contain_text('1 pendiente')
+                a.locator('#review-summary').click()
+                expect(a.locator('#student-rows tr').last.locator('input').last).to_be_focused()
                 for width, height in ((1440,900),(1366,768)):
                     a.set_viewport_size({'width':width,'height':height})
                     a.evaluate('window.scrollTo(0,0)')
@@ -273,9 +302,33 @@ with tempfile.TemporaryDirectory(prefix='certicoex-accounts-browser-') as direct
                 a.locator('#paste-text').fill('12345678Z Persona de Prueba')
                 a.locator('#parse-paste').click()
                 expect(a.locator('#review-summary')).to_contain_text('pendiente de añadir')
+                a.locator('#review-summary').click()
+                expect(a.locator('#apply-import')).to_be_focused()
                 a.locator('#cancel-import').click()
                 expect(a.locator('#student-rows tr')).to_have_count(4)
                 expect(a.locator('#import-inputs')).to_be_visible()
+                # A Word with a trailing blank page produces actionable layout notices.
+                meta = next(t for t in admin_context.request.get(BASE + '/api/templates').json() if t['id']==template_id)
+                replaced = admin_context.request.put(BASE + f'/api/templates/{template_id}/file', multipart={'version':str(meta['version']),'file':{'name':'salto.docx','mimeType':'application/vnd.openxmlformats-officedocument.wordprocessingml.document','buffer':replacement.getvalue()}})
+                assert replaced.status == 200
+                a.locator('#preview').click()
+                expect(a.locator('#preview-dialog')).to_be_visible(timeout=30000)
+                expect(a.locator('#preview-layout-report')).to_contain_text('Posibles páginas vacías')
+                a.locator('#preview-layout-report').get_by_role('button',name='Ver página 2',exact=True).click()
+                expect(a.locator('#pdf-preview')).to_have_attribute('src',re.compile('#page=2$'))
+                a.screenshot(path=str(ROOT.parent / 'work' / 'layout-preview.png'),full_page=True)
+                a.locator('[data-close=preview-dialog]').click()
+                a.locator('#generate').click()
+                expect(a.locator('#download-pdf')).to_be_visible(timeout=30000)
+                expect(a.locator('#layout-report')).to_contain_text('Posibles páginas vacías')
+                a.locator('#layout-report').get_by_role('button',name='Ver página 2',exact=True).click()
+                expect(a.locator('#preview-dialog')).to_be_visible()
+                a.locator('[data-close=preview-dialog]').click()
+                restored = admin_context.request.post(BASE + f'/api/templates/{template_id}/restore',data={'version':replaced.json()['version']})
+                assert restored.status == 200
+                a.locator('#generate').click()
+                expect(a.locator('#download-pdf')).to_be_visible(timeout=30000)
+                expect(a.locator('#layout-report')).to_be_hidden()
                 a.set_viewport_size({'width':390,'height':844})
                 a.screenshot(path=str(ROOT.parent / 'work' / 'compact-ui' / 'mobile.png'),full_page=True)
                 a.set_viewport_size({'width':390,'height':1000})
