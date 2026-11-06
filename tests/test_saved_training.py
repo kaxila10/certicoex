@@ -13,7 +13,11 @@ import test_workflow as fixtures
 
 
 class SavedTraining(unittest.TestCase):
-    setUp = fixtures.Workflow.setUp
+    def setUp(self):
+        self.retention = patch.dict('os.environ', {'CERTICOEX_RETAIN_STUDENTS': 'true'})
+        self.retention.start()
+        self.addCleanup(self.retention.stop)
+        fixtures.Workflow.setUp(self)
     tearDown = fixtures.Workflow.tearDown
     batch = fixtures.Workflow.batch
 

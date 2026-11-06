@@ -24,7 +24,10 @@ Tu plantilla de manipulado, envasado y maquinaria ya está incluida.
 La firma y el nombre anteriores se han retirado de la copia preparada.
 El archivo Word original no se ha modificado.
 
-Los datos se guardan en este ordenador, en la carpeta .local/data del programa.
+Plantillas, empresas y perfil/firma se guardan en este ordenador, en .local/data.
+Los alumnos no se archivan. Guarda los documentos descargados donde corresponda
+y pulsa "Borrar alumnos y archivos temporales". Las descargas caducan en un
+máximo de 30 minutos y pueden perderse antes al reiniciar o generar muchos lotes.
 No necesitas crear una cuenta. No es un servicio web publicado en Internet.
 Esta versión es para uso personal; no tiene cuentas de varios técnicos.
 No se han probado los lanzadores en un Windows o Mac reales: la aplicación

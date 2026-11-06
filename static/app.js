@@ -2,6 +2,7 @@ const $ = id => document.getElementById(id);
 let templates = [], profile = {}, students = [], imported = null, busy = false, revision = 0;
 let importPreview = [];
 let importReading = false;
+const temporaryKeys = new Set();
 let toastTimer;
 const COMPANY_KEY = 'certicoex.companies.v1';
 let companies = [];
@@ -192,7 +193,7 @@ function renderImportPreview() {
 async function readImport(task, message) {
   if (importReading) return;
   importReading = true; imported = null; importPreview = []; $('mapping-panel').hidden = true;
-  const controls = ['parse-paste', 'excel-file', 'document-file', 'paste-text', 'apply-import', 'cancel-import'];
+  const controls = ['parse-paste', 'excel-file', 'document-file', 'paste-text', 'apply-import', 'cancel-import', 'clear-temporary'];
   controls.forEach(id => $(id).disabled = true);
   $('import-reading').textContent = message;
   try { showImport(await task()); }
@@ -235,11 +236,12 @@ async function generate(preview) {
   const data = payload(preview); if (!data) return;
 
   busy = true; const startedAt = revision;
-  ['preview', 'generate'].forEach(id => $(id).disabled = true);
+  ['preview', 'generate', 'clear-temporary'].forEach(id => $(id).disabled = true);
   $('downloads').hidden = true;
   $('generation-status').textContent = preview ? 'Preparando la vista previa…' : `Generando ${students.length} certificados. El PDF puede tardar unos instantes…`;
   try {
     const result = await api('/api/generate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+    if (result.temporary_minutes) temporaryKeys.add(result.word.split('/')[3]);
     if (!preview) { await loadCompanies(); const entry = companies.find(c => cleanDni(c.cif) === cleanDni(data.cif)); if (entry) showCompanies(entry.id); try { localStorage.setItem(COMPANY_KEY,JSON.stringify(companies)); } catch {} }
     if (startedAt !== revision) { $('generation-status').textContent = 'Los datos cambiaron durante la generación. Vuelve a generar para usar los datos actuales.'; return; }
     if (preview && result.pdf) {
@@ -248,14 +250,32 @@ async function generate(preview) {
     } else {
       $('download-word').href = result.word; $('download-pdf').hidden = !result.pdf;
       if (result.pdf) $('download-pdf').href = result.pdf;
-      $('result-info').textContent = `${result.count} certificado(s)${result.pages ? ` · ${result.pages} página(s) en el PDF` : ''}. ${preview ? 'Vista previa disponible durante 24 horas.' : 'Documentos conservados en el historial.'}`;
+      const retention = result.temporary_minutes ? `Descargas temporales durante un máximo de ${result.temporary_minutes} minutos. Guarda tus documentos en Google Drive y pulsa «Borrar alumnos y archivos temporales».` : preview ? 'Vista previa disponible durante 24 horas.' : 'Documentos conservados en el historial.';
+      $('result-info').textContent = `${result.count} certificado(s)${result.pages ? ` · ${result.pages} página(s) en el PDF` : ''}. ${retention}`;
       $('downloads').querySelector('h3').textContent = preview ? 'Prueba en Word disponible' : 'Tu lote está listo';
       $('downloads').hidden = false;
       $('generation-status').textContent = result.warning || 'Documentos generados correctamente.';
     }
     if (result.warning) toast(result.warning);
-  } finally { busy = false; ['preview', 'generate'].forEach(id => $(id).disabled = false); }
+  } finally { busy = false; ['preview', 'generate', 'clear-temporary'].forEach(id => $(id).disabled = false); }
 }
+
+$('clear-temporary').onclick = () => run(async () => {
+  if (busy || importReading || !confirm('¿Has guardado los documentos que necesitas? Se borrarán los alumnos de esta pantalla y sus archivos temporales de esta sesión.')) return;
+  $('clear-temporary').disabled = true;
+  try {
+    await Promise.all([...temporaryKeys].map(async key => { await api(`/api/files/${key}`, {method:'DELETE'}); temporaryKeys.delete(key); }));
+    students = []; imported = null; importPreview = []; currentDraftId = null;
+    ['paste-text', 'extracted-text', 'excel-file', 'document-file'].forEach(id => $(id).value = '');
+    ['import-rows', 'import-warnings'].forEach(id => $(id).replaceChildren());
+    $('unparsed-lines').textContent = ''; $('import-info').textContent = ''; $('import-sample').textContent = ''; $('import-validation').textContent = '';
+    $('mapping-panel').hidden = true; $('pdf-preview').removeAttribute('src');
+    ['download-word', 'download-pdf', 'preview-word'].forEach(id => $(id).removeAttribute('href'));
+    if ($('preview-dialog').open) $('preview-dialog').close();
+    $('result-info').textContent = ''; $('draft-status').textContent = ''; dirty(); renderStudents();
+    toast('Alumnos y archivos temporales de esta sesión eliminados.');
+  } finally { $('clear-temporary').disabled = false; }
+});
 ['open-profile', 'profile-shortcut', 'profile-status'].forEach(id => $(id).onclick = () => $('profile-dialog').showModal());
 $('open-template').onclick = () => $('template-dialog').showModal();
 document.querySelectorAll('[data-close]').forEach(button => button.onclick = () => $(button.dataset.close).close());
@@ -316,7 +336,15 @@ $('apply-import').onclick = () => run(async () => {
   students.push(...rows); imported = null; importPreview = []; $('mapping-panel').hidden = true; $('paste-text').value = ''; dirty(); renderStudents(); toast(`${rows.length} alumnos añadidos. Revisa sus datos.`);
 });
 $('preview').onclick = () => run(() => generate(true)); $('generate').onclick = () => run(() => generate(false));
-run(async () => { const [p, , health] = await Promise.all([api('/api/profile'), loadTemplates(), api('/api/health'), migrateCompanies()]); profile = p; updateProfile(); $('trial-notice').hidden = !health.storage_ephemeral; });
+run(async () => {
+  const [p, , health] = await Promise.all([api('/api/profile'), loadTemplates(), api('/api/health'), migrateCompanies()]);
+  profile = p; updateProfile(); $('trial-notice').hidden = !health.storage_ephemeral;
+  $('archive-tools').hidden = !health.retains_students;
+  $('temporary-tools').hidden = !!health.retains_students;
+  if (!health.retains_students) {
+    $('storage-footer').textContent = 'Alumnos sin historial · Descargas temporales · Guarda los certificados en tu Google Drive.';
+  }
+});
 
 $('template').addEventListener('change', () => { $('hours').value = templates.find(t => t.id === $('template').value)?.hours ?? ''; dirty(); });
 $('open-course').onclick = () => {

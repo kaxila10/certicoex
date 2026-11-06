@@ -35,7 +35,7 @@ def run(*args,check=True):
 def start_app(folder,url,logs):
     with socket.socket() as probe:
         probe.bind(('127.0.0.1',0));port=probe.getsockname()[1]
-    app_env={**os.environ,'CERTICOEX_DATA':str(folder),'CERTICOEX_DATABASE_URL':url,'CERTICOEX_AUTH_REQUIRED':'false','CERTICOEX_PASSWORD':'','RENDER':'false','CERTICOEX_EPHEMERAL':'true'}
+    app_env={**os.environ,'CERTICOEX_DATA':str(folder),'CERTICOEX_DATABASE_URL':url,'CERTICOEX_AUTH_REQUIRED':'false','CERTICOEX_PASSWORD':'','RENDER':'false','CERTICOEX_EPHEMERAL':'true','CERTICOEX_RETAIN_STUDENTS':'true'}
     process=subprocess.Popen([sys.executable,'-m','uvicorn','app.main:app','--host','127.0.0.1','--port',str(port)],cwd=ROOT,env=app_env,stdout=logs,stderr=logs)
     client=httpx.Client(base_url=f'http://127.0.0.1:{port}',timeout=180)
     for _ in range(100):

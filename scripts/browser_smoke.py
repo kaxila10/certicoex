@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory(prefix='certicoex-browser-') as folder:
     sheet.append(['Ana','García López','12345678Z'])
     excel=data/'alumnos.xlsx';workbook.save(excel)
     log = (artifacts/'browser-server.log').open('w')
-    process = subprocess.Popen([sys.executable,'-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8001'],cwd=ROOT,env={**os.environ,'CERTICOEX_DATA':str(data)},stdout=log,stderr=log)
+    process = subprocess.Popen([sys.executable,'-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8001'],cwd=ROOT,env={**os.environ,'CERTICOEX_DATA':str(data),'CERTICOEX_RETAIN_STUDENTS':'true'},stdout=log,stderr=log)
     try:
         for _ in range(50):
             try:

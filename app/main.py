@@ -7,6 +7,7 @@ import re
 import shutil
 import unicodedata
 import uuid
+from tempfile import TemporaryDirectory
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -24,6 +25,7 @@ from .validation import review_students
 from .naming import document_name, disposition
 from .rosters import parse_text, tabular
 from .roster_files import extract_list
+from .temporary_jobs import temporary_jobs, LIFETIME_SECONDS
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = Path(os.environ.get('CERTICOEX_DATA', ROOT / '.local/data'))
@@ -31,6 +33,10 @@ for folder in ('templates', 'jobs'):
     (DATA / folder).mkdir(parents=True, exist_ok=True)
 seed_templates(DATA, ROOT / 'defaults')
 app = FastAPI(title='Certicoex', docs_url=None, redoc_url=None)
+
+
+def retains_students():
+    return os.environ.get('CERTICOEX_RETAIN_STUDENTS', 'false').lower() == 'true'
 
 
 @app.middleware('http')
@@ -103,7 +109,8 @@ def health():
     db.get('settings','profile')
     external = bool(os.environ.get('CERTICOEX_DATABASE_URL'))
     ephemeral = not external and os.environ.get('CERTICOEX_EPHEMERAL', '').lower() == 'true'
-    return {'status': 'ok', 'pdf_available': bool(office_binary()), 'storage_ephemeral':ephemeral, 'storage_external':external}
+    return {'status': 'ok', 'pdf_available': bool(office_binary()), 'storage_ephemeral':ephemeral, 'storage_external':external,
+            'retains_students': retains_students(), 'temporary_minutes': LIFETIME_SECONDS // 60}
 
 
 @app.get('/api/templates')
@@ -257,6 +264,8 @@ def new_draft(payload: Draft):
 
 @app.put('/api/drafts/{key}')
 def update_draft(key: str, payload: Draft):
+    if not retains_students():
+        raise HTTPException(409, 'El guardado de alumnos está desactivado. Los borradores no se conservan.')
     if not re.fullmatch(r'[a-f0-9]{32}',key): raise HTTPException(404)
     record={'id':key,'updated':datetime.now(timezone.utc).isoformat(),'data':payload.model_dump()}
     return open_store(DATA).put('draft',key,record)
@@ -264,6 +273,8 @@ def update_draft(key: str, payload: Draft):
 
 @app.get('/api/drafts')
 def drafts():
+    if not retains_students():
+        return []
     return open_store(DATA).all('draft')
 
 
@@ -275,6 +286,8 @@ def delete_draft(key: str):
 
 @app.get('/api/history')
 def history(q: str='', course_date: str='', offset: int=0):
+    if not retains_students():
+        return {'total': 0, 'items': []}
     records=open_store(DATA).all('history')
     needle=normalize(q)
     records=[r for r in records if (not course_date or r['data']['course_date']==course_date) and (not needle or needle in normalize(json.dumps(r,ensure_ascii=False)))]
@@ -384,6 +397,8 @@ def generate(payload: Batch):
         if dni in seen:
             raise ValueError('Hay documentos de identidad repetidos. Corrige el listado antes de generar.')
         seen.add(dni)
+    if not retains_students():
+        return generate_temporary(payload, template, current)
     clean_jobs()
     key = uuid.uuid4().hex
     folder = DATA / 'jobs' / key
@@ -419,10 +434,52 @@ def generate(payload: Batch):
     return result
 
 
+def generate_temporary(payload, template, current):
+    key = uuid.uuid4().hex
+    db = open_store(DATA)
+    meta = db.get('template', payload.template_id, {})
+    filename = document_name(meta.get('name', 'Curso'), payload.company, payload.course_date)
+    d = payload.course_date
+    common = {'EMPRESA': payload.company, 'CIF': payload.cif, 'HORAS': f'{payload.hours:g}',
+              'FECHA': f'{d.day} de {MONTHS[d.month-1]} de {d.year}', 'TECNICO': current['name']}
+    result = {'word': f'/api/files/{key}/docx', 'pdf': None, 'pages': None,
+              'count': len(payload.students), 'filename': filename, 'temporary_minutes': LIFETIME_SECONDS // 60}
+    with TemporaryDirectory(prefix='certicoex-certificates-') as temporary:
+        folder = Path(temporary)
+        output = folder / 'certificados.docx'
+        render_batch(template, [s.model_dump() for s in payload.students], common, db.asset('signature'), output)
+        files = {'docx': output.read_bytes()}
+        try:
+            pdf, pages = convert_pdf(output, folder)
+            files['pdf'] = pdf.read_bytes()
+            result.update(pdf=f'/api/files/{key}/pdf', pages=pages)
+        except RuntimeError as exc:
+            result['warning'] = str(exc)
+    # No student metadata, certificates or previews are written to the database.
+    temporary_jobs.put(key, files, filename)
+    if not payload.preview:
+        save_company(Company(name=payload.company, cif=payload.cif))
+    return result
+
+
+@app.delete('/api/files/{key}')
+def delete_temporary_files(key: str):
+    if not re.fullmatch(r'[a-f0-9]{32}', key):
+        raise HTTPException(404)
+    temporary_jobs.delete(key)
+    return {'deleted': True}
+
+
 @app.get('/api/files/{key}/{kind}')
 def download(key: str, kind: str, inline: bool = False):
     if not re.fullmatch(r'[a-f0-9]{32}', key) or kind not in ('pdf', 'docx'):
         raise HTTPException(404)
+    if not retains_students():
+        job = temporary_jobs.get(key)
+        if not job or kind not in job['files']:
+            raise HTTPException(404, 'Archivo eliminado o caducado. Vuelve a generar los certificados.')
+        return Response(job['files'][kind], media_type='application/pdf' if kind == 'pdf' else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                        headers={'Content-Disposition': disposition(job['filename'], kind, inline)})
     db=open_store(DATA)
     content=db.asset('jobs/'+key+'/'+kind)
     preview=db.get('preview',key)

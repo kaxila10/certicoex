@@ -24,3 +24,6 @@ button.profile-status{width:100%;text-align:left;font:inherit;font-size:11px}
 #column-mapping h4{font-size:12px;margin:18px 0 6px}
 #document-file{font-size:11px;max-width:100%}
 @media(max-width:500px){.paste-footer{flex-direction:column;gap:10px}.import-tabs{gap:12px}.import-tabs button{font-size:10px}.import-actions .button{width:100%}}
+
+[hidden]{display:none!important}
+#temporary-tools{align-items:flex-start}#temporary-tools>span{max-width:680px;line-height:1.7}
