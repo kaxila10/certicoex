@@ -114,6 +114,7 @@ with tempfile.TemporaryDirectory(prefix='certicoex-accounts-browser-') as direct
                 a.locator('#open-templates').click()
                 expect(a.locator('#templates-dialog')).to_be_visible()
                 expect(a.locator('#hours')).to_have_value('5')
+                expect(a.locator('#templates-list').get_by_role('button', name='Eliminar', exact=True)).to_have_count(0)
                 card = a.locator('#templates-list .saved-training').filter(has=a.locator('h3', has_text='Plantilla compartida adaptable'))
                 expect(card).to_contain_text('Archivo Word: plantilla.docx')
                 with a.expect_download() as saved:
@@ -217,6 +218,32 @@ with tempfile.TemporaryDirectory(prefix='certicoex-accounts-browser-') as direct
                 owner.screenshot(path=str(ROOT.parent / 'work' / 'accounts-desktop.png'), full_page=True)
                 a.set_viewport_size({'width':390,'height':1000})
                 a.screenshot(path=str(ROOT.parent / 'work' / 'accounts-mobile.png'), full_page=True)
+                # Only the administrator can delete; cancel preserves the Word.
+                owner.locator('#open-templates').click()
+                card = owner.locator('#templates-list .saved-training').filter(has=owner.locator('h3', has_text='Plantilla compartida adaptable'))
+                card.get_by_role('button', name='Usar plantilla').click()
+                owner.locator('#open-templates').click()
+                owner.once('dialog', lambda dialog: dialog.dismiss())
+                card.get_by_role('button', name='Eliminar', exact=True).click()
+                expect(card).to_be_visible()
+                template_id = uploaded.json()['id']
+                assert admin_context.request.get(BASE + f'/api/templates/{template_id}/file').status == 200
+                owner.once('dialog', lambda dialog: dialog.accept())
+                card.get_by_role('button', name='Eliminar', exact=True).click()
+                expect(card).to_have_count(0)
+                expect(owner.locator('#template')).to_have_value('')
+                expect(owner.locator('#hours')).to_have_value('')
+                assert admin_context.request.get(BASE + f'/api/templates/{template_id}/file').status == 404
+                owner.locator('#templates-list').get_by_role('button', name='Usar plantilla').click()
+                owner.locator('#open-templates').click()
+                owner.once('dialog', lambda dialog: dialog.accept())
+                owner.locator('#templates-list').get_by_role('button', name='Eliminar', exact=True).click()
+                expect(owner.locator('#templates-list')).to_have_text('Todavía no hay plantillas guardadas.')
+                expect(owner.locator('#template option')).to_have_count(1)
+                owner.locator('[data-close=templates-dialog]').click()
+                a.reload()
+                a.locator('#open-templates').click()
+                expect(a.locator('#templates-list')).to_have_text('Todavía no hay plantillas guardadas.')
                 browser.close()
             print('PASS: four accounts, owner migration, separate profiles/signatures and certificates, shared companies/templates, download isolation, deactivation, reset, self password change, logout across tabs, mobile, no worker archives or JS errors.')
         finally:

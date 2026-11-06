@@ -83,6 +83,19 @@ class Store:
         with self.connection() as db:
             db.execute(self.sql('DELETE FROM records WHERE kind=? AND id=?'), (kind,key))
 
+    def delete_template(self, key):
+        """Remove a shared template and its Word in one transaction."""
+        with self.connection() as db:
+            db.execute(self.sql('DELETE FROM records WHERE kind=? AND id=?'), ('template', key))
+            db.execute(self.sql('DELETE FROM assets WHERE id=?'), ('templates/' + key,))
+
+    def update_template(self, key, value):
+        # An edit racing with deletion must not recreate a deleted template.
+        with self.connection() as db:
+            changed = db.execute(self.sql('UPDATE records SET payload=?,modified=? WHERE kind=? AND id=?'),
+                                 (json.dumps(value, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), 'template', key))
+            return value if changed.rowcount else None
+
     def asset(self, key):
         with self.connection() as db:
             row = db.execute(self.sql('SELECT content FROM assets WHERE id=?'), (key,)).fetchone()

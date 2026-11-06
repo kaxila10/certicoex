@@ -291,6 +291,18 @@ def download_template(key: str):
                         headers={'Content-Disposition': disposition(name, 'docx')})
 
 
+@app.delete('/api/templates/{key}')
+def delete_template(key: str, request: Request):
+    if accounts.enabled():
+        admin(request)
+    if not re.fullmatch(r'[a-f0-9]{32}', key):
+        raise HTTPException(404, 'Plantilla no encontrada.')
+    open_store(DATA).delete_template(key)
+    for suffix in ('.json', '.docx'):
+        (DATA / 'templates' / (key + suffix)).unlink(missing_ok=True)
+    return {'deleted': True}
+
+
 @app.post('/api/templates')
 def upload_template(file: UploadFile = File(...), name: str = Form(...)):
     if not (file.filename or '').lower().endswith('.docx'):
@@ -426,7 +438,10 @@ def course_settings(key: str, payload: CourseSettings):
     if not meta: raise HTTPException(404,'Curso no encontrado.')
     if not payload.name.strip(): raise ValueError('Introduce un nombre para el curso.')
     meta.update(name=payload.name.strip(),hours=payload.hours)
-    return db.put('template',key,meta)
+    updated = db.update_template(key, meta)
+    if updated is None:
+        raise HTTPException(404, 'Curso no encontrado.')
+    return updated
 
 
 class Review(BaseModel):

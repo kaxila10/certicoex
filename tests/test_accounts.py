@@ -157,6 +157,7 @@ class Accounts(unittest.TestCase):
         self.assertEqual(a.get(template_url).status_code, 200)
         fresh = TestClient(main.app); self.extra.append(fresh)
         self.assertEqual(fresh.get(template_url).status_code, 401)
+
         with ThreadPoolExecutor(2) as pool:
             saved = list(pool.map(lambda client: client.post('/api/companies', json={'name': 'Empresa compartida', 'cif': 'B12345678'}), (a, b)))
         self.assertTrue(all(response.status_code == 200 for response in saved))
@@ -174,6 +175,55 @@ class Accounts(unittest.TestCase):
         self.assertEqual(duplicate.status_code, 422)
         self.assertEqual(a.post('/api/profile', data={'name': 'Perfil de una pestaña antigua'}, headers={'X-Certicoex-User': 'owner'}).status_code, 409)
         self.assertEqual(a.get('/api/profile').json()['name'], '')
+
+    def test_template_deletion_is_reserved_to_admin(self):
+        technician, _ = self.technician('tecnico-a')
+        route = f'/api/templates/{self.template}'
+        fresh = TestClient(main.app); self.extra.append(fresh)
+        self.assertEqual(fresh.delete(route).status_code, 401)
+        self.assertEqual(technician.delete(route).status_code, 403)
+        self.assertEqual(self.client.delete(route, headers={'Origin': 'https://otro.example'}).status_code, 403)
+        self.assertEqual(technician.get(route + '/file').status_code, 200)
+        self.assertEqual(self.client.delete('/api/templates/not-a-template').status_code, 404)
+
+    def test_template_deletion_removes_word_without_affecting_department_data(self):
+        original = main.template_path(self.template).read_bytes()
+        other = self.client.post('/api/templates', data={'name': 'Conservar este curso'},
+                                 files={'file': ('conservar.docx', original)}).json()
+        generated = self.emit(self.client)
+        saved_profile = self.client.get('/api/profile').json()
+        db = main.open_store(self.data)
+        old_meta = db.get('template', self.template)
+        # Failure in the file deletion must also roll back the metadata deletion.
+        with db.connection() as connection:
+            connection.execute("CREATE TRIGGER prevent_template_delete BEFORE DELETE ON assets BEGIN SELECT RAISE(ABORT, 'test failure'); END")
+        with self.assertRaises(sqlite3.IntegrityError):
+            db.delete_template(self.template)
+        self.assertIsNotNone(db.get('template', self.template))
+        self.assertEqual(db.asset('templates/' + self.template), original)
+        with db.connection() as connection:
+            connection.execute('DROP TRIGGER prevent_template_delete')
+        route = f'/api/templates/{self.template}'
+        self.assertEqual(self.client.delete(route).status_code, 200)
+        self.assertIsNone(db.get('template', self.template))
+        self.assertIsNone(db.asset('templates/' + self.template))
+        for suffix in ('.docx', '.json'):
+            self.assertFalse((self.data / 'templates' / (self.template + suffix)).exists())
+        self.assertEqual(self.client.get(route + '/file').status_code, 404)
+        self.assertEqual(self.client.post('/api/generate', json=self.batch()).status_code, 404)
+        self.assertEqual(self.client.put(route + '/settings', json={'name': 'Ya eliminado'}).status_code, 404)
+        self.assertIsNone(db.update_template(self.template, old_meta))
+        self.assertEqual([t['id'] for t in self.client.get('/api/templates').json()], [other['id']])
+        self.assertEqual(self.client.get(f"/api/templates/{other['id']}/file").content, original)
+        self.assertEqual(self.client.get('/api/profile').json(), saved_profile)
+        self.assertEqual(len(self.client.get('/api/companies').json()), 1)
+        self.assertEqual(self.client.get(generated['word']).status_code, 200)
+        # Emptying the catalog stays empty after cache loss and startup seeding.
+        self.assertEqual(self.client.delete(f"/api/templates/{other['id']}").status_code, 200)
+        storage._open.cache_clear()
+        main.seed_templates(self.data, main.ROOT / 'defaults')
+        self.assertEqual(self.client.get('/api/templates').json(), [])
+        self.assertEqual(self.client.delete(route).status_code, 200)
 
     def test_deactivation_reset_and_self_password_change_revoke_sessions(self):
         a, actor = self.technician('tecnico-a')

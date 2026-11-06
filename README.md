@@ -34,6 +34,8 @@ En un uso local sin acceso protegido se mantiene el perfil único. `CERTICOEX_MU
 
 «Ver plantillas» muestra todos los cursos guardados y su archivo Word, permite seleccionar un curso y descargar la plantilla original. Las subidas nuevas conservan el nombre del archivo; si una plantilla antigua no lo guardó, se indica y sigue siendo posible descargarla con el nombre del curso. El catálogo y las descargas se comparten entre los técnicos y requieren iniciar sesión en las instalaciones protegidas.
 
+El administrador puede pulsar «Eliminar» en cada plantilla y confirmar el borrado para todo el departamento. Se eliminan el registro, el Word y sus copias en la caché local; las empresas, los perfiles y los certificados ya generados se conservan. La acción no tiene deshacer: descarga primero el Word si quieres guardar una copia. En el modo local de perfil único también está disponible.
+
 Sube un `.docx` desde «Añadir plantilla», con estos campos, respetando las llaves:
 
 | Campo | Contenido |

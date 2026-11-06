@@ -477,6 +477,20 @@ async function showTemplates() {
       $('template').value = template.id; $('hours').value = template.hours ?? '';
       dirty(); summary(); $('templates-dialog').close();
     }), download);
+    if (signedInUser?.role === 'admin') {
+      const remove = action('Eliminar', async () => {
+        if (!confirm(`¿Eliminar la plantilla «${template.name}» para todos los técnicos? Se borrará el Word guardado. Esta acción no se puede deshacer.`)) return;
+        remove.disabled = true;
+        try {
+          const wasSelected = $('template').value === template.id;
+          await api(`/api/templates/${template.id}`, {method:'DELETE'});
+          await showTemplates();
+          if (wasSelected) { $('template').value = ''; $('hours').value = ''; dirty(); summary(); }
+          toast('Plantilla eliminada.');
+        } finally { remove.disabled = false; }
+      });
+      remove.classList.add('danger'); actions.append(remove);
+    }
     $('templates-list').append(card);
   });
   $('templates-dialog').showModal();
