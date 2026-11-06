@@ -19,6 +19,7 @@ class Hosting(unittest.TestCase):
             'CERTICOEX_USERNAME':'tecnico',
             'CERTICOEX_PASSWORD':'test-only-password-not-deployed',
             'CERTICOEX_EPHEMERAL':'true',
+            'CERTICOEX_MULTIUSER':'false',
         })
         self.env.start()
         self.client = TestClient(app)

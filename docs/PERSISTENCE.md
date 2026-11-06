@@ -1,6 +1,6 @@
 # Activar el guardado permanente
 
-Por defecto solo se conservan plantillas, ajustes de cursos, empresas (nombre y CIF) y perfil/firma del técnico. Los alumnos y certificados se procesan temporalmente; no se archivan en la base de datos.
+Por defecto solo se conservan plantillas, ajustes de cursos, empresas (nombre y CIF) y cuentas/perfiles/firmas de los técnicos. Los alumnos y certificados se procesan temporalmente; no se archivan en la base de datos.
 
 El código soporta dos opciones. Publicar la app no contrata ninguna de ellas y el plan Free de Render sigue siendo temporal si no se conecta una base de datos. El aviso amarillo permanece visible mientras ese sea el caso.
 
@@ -37,7 +37,7 @@ Al abrir la nueva versión se importan las empresas de la agenda de ese navegado
 
 La plantilla inicial se restaura automáticamente. Con el modo temporal no se crea historial. Si una instalación antigua ya almacenaba trabajadores, ese contenido requiere una limpieza independiente: desactivar el archivo no lo purga de una base externa.
 
-En el archivo opcional (`CERTICOEX_RETAIN_STUDENTS=true`), las vistas previas caducan a las 24 horas y se limpian al generar; los documentos del historial no caducan por la app y consumen espacio de la base de datos. Revisa las cuotas, las políticas de inactividad y las copias de seguridad del proveedor. El almacenamiento permanente no sustituye una copia de seguridad. Sigue siendo una instalación privada de un solo técnico/perfil, sin separación de usuarios.
+En el archivo opcional (`CERTICOEX_RETAIN_STUDENTS=true`), las vistas previas caducan a las 24 horas y se limpian al generar; los documentos del historial no caducan por la app y consumen espacio de la base de datos. Revisa las cuotas, las políticas de inactividad y las copias de seguridad del proveedor. El almacenamiento permanente no sustituye una copia de seguridad. Con el acceso protegido, los perfiles y firmas se separan por cuenta y las plantillas y empresas se comparten con el equipo.
 
 ## Pruebas de desarrollo
 

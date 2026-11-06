@@ -13,13 +13,21 @@ class TemporaryJobs:
         self.jobs = OrderedDict()
         self.lock = RLock()
 
-    def delete(self, key):
+    def delete(self, key, owner=None):
         with self.lock:
+            if owner is not None and self.jobs.get(key, {}).get('owner') != owner:
+                return False
             job = self.jobs.pop(key, None)
             if job:
                 job['timer'].cancel()
+            return bool(job)
 
-    def put(self, key, files, filename):
+    def delete_owner(self, owner):
+        with self.lock:
+            for key in list(self.jobs):
+                self.delete(key, owner)
+
+    def put(self, key, files, filename, owner='owner'):
         size = sum(map(len, files.values()))
         if size > self.max_bytes:
             raise ValueError('El lote ocupa demasiado espacio temporal. Divide los alumnos en lotes más pequeños.')
@@ -28,12 +36,14 @@ class TemporaryJobs:
                 self.delete(next(iter(self.jobs)))
             timer = Timer(self.lifetime, self.delete, args=(key,))
             timer.daemon = True
-            self.jobs[key] = {'files': files, 'filename': filename, 'size': size, 'expires': time() + self.lifetime, 'timer': timer}
+            self.jobs[key] = {'files': files, 'filename': filename, 'size': size, 'expires': time() + self.lifetime, 'timer': timer, 'owner': owner}
             timer.start()
 
-    def get(self, key):
+    def get(self, key, owner=None):
         with self.lock:
             job = self.jobs.get(key)
+            if job and owner is not None and job['owner'] != owner:
+                return None
             if job and job['expires'] <= time():
                 self.delete(key)
                 return None

@@ -65,6 +65,20 @@ class Store:
             db.execute(self.sql('INSERT INTO records(kind,id,payload,modified) VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET payload=excluded.payload,modified=excluded.modified'), (kind,key,json.dumps(value,ensure_ascii=False),datetime.now(timezone.utc).isoformat()))
         return value
 
+    def create_account(self, account):
+        """Reserve the login and its account atomically, even for concurrent admins."""
+        modified = datetime.now(timezone.utc).isoformat()
+        with self.connection() as db:
+            try:
+                insert = self.sql('INSERT INTO records(kind,id,payload,modified) VALUES(?,?,?,?)')
+                db.execute(insert, ('account_login', account['username'], json.dumps({'user_id': account['id']}), modified))
+                db.execute(insert, ('account', account['id'], json.dumps(account), modified))
+            except Exception as exc:
+                if isinstance(exc, sqlite3.IntegrityError) or getattr(exc, 'sqlstate', None) == '23505':
+                    raise ValueError('Ese usuario ya existe. Elige otro nombre.') from None
+                raise
+        return account
+
     def delete(self, kind, key):
         with self.connection() as db:
             db.execute(self.sql('DELETE FROM records WHERE kind=? AND id=?'), (kind,key))

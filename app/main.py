@@ -10,12 +10,13 @@ import uuid
 from tempfile import TemporaryDirectory
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from openpyxl import load_workbook
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field, field_validator
+from starlette.concurrency import run_in_threadpool
 
 from .documents import check_zip, convert_pdf, inspect_template, office_binary, render_batch
 from .access import authorized, configured
@@ -26,6 +27,7 @@ from .naming import document_name, disposition
 from .rosters import parse_text, tabular
 from .roster_files import extract_list
 from .temporary_jobs import temporary_jobs, LIFETIME_SECONDS
+from . import accounts
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = Path(os.environ.get('CERTICOEX_DATA', ROOT / '.local/data'))
@@ -36,16 +38,33 @@ app = FastAPI(title='Certicoex', docs_url=None, redoc_url=None)
 
 
 def retains_students():
-    return os.environ.get('CERTICOEX_RETAIN_STUDENTS', 'false').lower() == 'true'
+    return not accounts.enabled() and os.environ.get('CERTICOEX_RETAIN_STUDENTS', 'false').lower() == 'true'
 
 
 @app.middleware('http')
 async def local_requests(request: Request, call_next):
-    if request.url.path != '/api/health':
+    path = request.url.path
+    public_path = path in ('/api/health', '/api/auth/login', '/login', '/login.js', '/style.css', '/favicon.ico', '/logo.png')
+    if path != '/api/health':
         if not configured():
             return JSONResponse({'detail': 'Configura una contraseña de acceso de al menos 16 caracteres en el servicio.'}, status_code=503, headers={'Cache-Control':'no-store'})
-        if not authorized(request.headers.get('authorization')):
+        if accounts.enabled():
+            token = request.cookies.get(accounts.COOKIE)
+            try:
+                actor = await run_in_threadpool(lambda: accounts.session_user(open_store(DATA), token)) if token and not public_path else None
+            except StorageUnavailable:
+                return JSONResponse({'detail': 'No se puede acceder al almacenamiento de usuarios. Vuelve a intentarlo en unos instantes.'}, status_code=503, headers={'Cache-Control': 'no-store'})
+            if not public_path and not actor:
+                if path == '/':
+                    return RedirectResponse('/login', status_code=303, headers={'Cache-Control': 'no-store'})
+                return JSONResponse({'detail': 'Tu sesión ha terminado. Inicia sesión de nuevo.'}, status_code=401, headers={'Cache-Control': 'no-store'})
+            if actor and request.headers.get('x-certicoex-user', actor['id']) != actor['id']:
+                return JSONResponse({'detail': 'La cuenta activa ha cambiado. Recarga la página antes de continuar.', 'code': 'session_changed'}, status_code=409, headers={'Cache-Control': 'no-store'})
+            request.state.user = actor
+        elif not public_path and not authorized(request.headers.get('authorization')):
             return JSONResponse({'detail': 'Introduce el usuario y la contraseña de la aplicación.'}, status_code=401, headers={'WWW-Authenticate':'Basic realm="Certicoex", charset="UTF-8"', 'Cache-Control':'no-store'})
+        else:
+            request.state.user = accounts.owner()
     if request.method not in ('GET', 'HEAD', 'OPTIONS'):
         from urllib.parse import urlsplit
         origin = request.headers.get('origin')
@@ -57,7 +76,142 @@ async def local_requests(request: Request, call_next):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Referrer-Policy'] = 'same-origin'
     response.headers['Cache-Control'] = 'no-store'
+    if path in ('/logo.png', '/favicon.ico'):
+        response.headers['Cache-Control'] = 'public, max-age=86400'
     response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+    return response
+
+
+@app.get('/login')
+def login_page():
+    return FileResponse(ROOT / 'static' / 'login.html')
+
+
+@app.get('/favicon.ico')
+def favicon():
+    return FileResponse(ROOT / 'static' / 'logo.png', media_type='image/png')
+
+
+class Credentials(BaseModel):
+    username: str = Field(min_length=1, max_length=50)
+    password: str = Field(min_length=1, max_length=200)
+
+
+@app.post('/api/auth/login')
+def login(payload: Credentials, request: Request):
+    if not accounts.enabled():
+        raise HTTPException(409, 'El acceso por cuentas no está activado en esta instalación.')
+    client = request.client.host if request.client else 'unknown'
+    if not accounts.check_rate(client):
+        raise HTTPException(429, 'Demasiados intentos. Espera 15 minutos antes de volver a intentarlo.')
+    db = open_store(DATA)
+    actor = accounts.authenticate(db, payload.username, payload.password)
+    if not actor:
+        accounts.failed_login(client)
+        raise HTTPException(401, 'Usuario o contraseña incorrectos.')
+    response = JSONResponse(accounts.public(actor))
+    response.set_cookie(accounts.COOKIE, accounts.create_session(db, actor), max_age=accounts.SESSION_SECONDS,
+                        httponly=True, samesite='lax', secure=request.url.scheme == 'https' or os.environ.get('RENDER', '').lower() == 'true', path='/')
+    return response
+
+
+@app.get('/api/auth/me')
+def me(request: Request):
+    return {**accounts.public(request.state.user), 'accounts_enabled': accounts.enabled()}
+
+
+@app.post('/api/auth/logout')
+def logout(request: Request):
+    accounts.logout(open_store(DATA), request.cookies.get(accounts.COOKIE))
+    temporary_jobs.delete_owner(request.state.user['id'])
+    response = JSONResponse({'logged_out': True})
+    response.delete_cookie(accounts.COOKIE, path='/')
+    return response
+
+
+def admin(request):
+    if not accounts.enabled() or request.state.user['role'] != 'admin':
+        raise HTTPException(403, 'Esta acción está reservada al administrador.')
+
+
+@app.get('/api/users')
+def list_users(request: Request):
+    admin(request)
+    rows = open_store(DATA).all('account')
+    if not any(row['id'] == 'owner' for row in rows):
+        rows.insert(0, accounts.owner())
+    return [accounts.public(row) for row in rows]
+
+
+class NewAccount(BaseModel):
+    username: str = Field(min_length=3, max_length=50)
+    password: str = Field(min_length=12, max_length=200)
+
+
+@app.post('/api/users')
+def create_user(payload: NewAccount, request: Request):
+    admin(request)
+    db = open_store(DATA)
+    name = accounts.username(payload.username)
+    if name == accounts.owner()['username'].strip().lower():
+        raise ValueError('Ese usuario ya existe. Elige otro nombre.')
+    key = uuid.uuid4().hex
+    actor = {'id': key, 'username': name, 'role': 'technician', 'active': True, 'version': 0,
+             'password_hash': accounts.password_hash(payload.password)}
+    db.create_account(actor)
+    return accounts.public(actor)
+
+
+class AccountChange(BaseModel):
+    active: bool | None = None
+    password: str | None = Field(default=None, min_length=12, max_length=200)
+
+
+@app.patch('/api/users/{key}')
+def update_user(key: str, payload: AccountChange, request: Request):
+    admin(request)
+    if key == 'owner' or key == request.state.user['id']:
+        raise ValueError('Gestiona tu propia contraseña desde «Mi cuenta».')
+    db = open_store(DATA)
+    actor = db.get('account', key)
+    if not actor:
+        raise HTTPException(404, 'Usuario no encontrado.')
+    if payload.active is not None:
+        actor['active'] = payload.active
+        actor['version'] += 1
+        if not payload.active:
+            temporary_jobs.delete_owner(key)
+    if payload.password is not None:
+        actor['password_hash'] = accounts.password_hash(payload.password)
+        actor['version'] += 1
+        temporary_jobs.delete_owner(key)
+    db.put('account', key, actor)
+    return accounts.public(actor)
+
+
+class PasswordChange(BaseModel):
+    current_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=12, max_length=200)
+
+
+@app.post('/api/auth/password')
+def change_password(payload: PasswordChange, request: Request):
+    if not accounts.enabled():
+        raise HTTPException(409, 'El acceso por cuentas no está activado.')
+    db = open_store(DATA)
+    actor = request.state.user
+    client = request.client.host if request.client else 'unknown'
+    if not accounts.check_rate(client):
+        raise HTTPException(429, 'Demasiados intentos. Espera 15 minutos antes de volver a intentarlo.')
+    if not accounts.authenticate(db, actor['username'], payload.current_password):
+        accounts.failed_login(client)
+        raise HTTPException(403, 'La contraseña actual no es correcta.')
+    changed = {**actor, 'password_hash': accounts.password_hash(payload.new_password), 'version': actor.get('version', 0) + 1}
+    db.put('account', actor['id'], changed)
+    accounts.logout(db, request.cookies.get(accounts.COOKIE))
+    response = JSONResponse({'changed': True})
+    response.set_cookie(accounts.COOKIE, accounts.create_session(db, changed), max_age=accounts.SESSION_SECONDS,
+                        httponly=True, samesite='lax', secure=request.url.scheme == 'https' or os.environ.get('RENDER', '').lower() == 'true', path='/')
     return response
 
 
@@ -86,7 +240,12 @@ def template_path(key):
     path = DATA / 'templates' / (key + '.docx')
     path.parent.mkdir(parents=True,exist_ok=True)
     if not path.exists() or path.read_bytes() != content:
-        path.write_bytes(content)
+        temporary = path.with_name('.' + key + '.' + uuid.uuid4().hex + '.tmp')
+        try:
+            temporary.write_bytes(content)
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
     return path
 
 
@@ -110,7 +269,8 @@ def health():
     external = bool(os.environ.get('CERTICOEX_DATABASE_URL'))
     ephemeral = not external and os.environ.get('CERTICOEX_EPHEMERAL', '').lower() == 'true'
     return {'status': 'ok', 'pdf_available': bool(office_binary()), 'storage_ephemeral':ephemeral, 'storage_external':external,
-            'retains_students': retains_students(), 'temporary_minutes': LIFETIME_SECONDS // 60}
+            'retains_students': retains_students(), 'temporary_minutes': LIFETIME_SECONDS // 60,
+            'accounts_enabled': accounts.enabled()}
 
 
 @app.get('/api/templates')
@@ -132,25 +292,40 @@ def upload_template(file: UploadFile = File(...), name: str = Form(...)):
 
 
 @app.get('/api/profile')
-def profile():
+def profile(request: Request):
+    return user_profile(request.state.user['id'])
+
+
+def profile_signature(db, user_id):
+    content = db.asset('signatures/' + user_id)
+    if content is None and user_id == 'owner':
+        content = db.asset('signature')
+    return content
+
+
+def user_profile(user_id):
     db = open_store(DATA)
-    data = db.get('settings','profile',{'name':''})
-    return {**data, 'has_signature': db.asset('signature') is not None}
+    data = db.get('profile', user_id)
+    if data is None:
+        data = db.get('settings', 'profile', {'name': ''}) if user_id == 'owner' else {'name': ''}
+    return {**data, 'has_signature': profile_signature(db, user_id) is not None}
 
 
 @app.get('/api/profile/signature')
-def signature_file():
-    content = open_store(DATA).asset('signature')
+def signature_file(request: Request):
+    content = profile_signature(open_store(DATA), request.state.user['id'])
     if content is None:
         raise HTTPException(404)
     return Response(content,media_type='image/png')
 
 
 @app.post('/api/profile')
-def save_profile(name: str = Form(...), signature: UploadFile | None = File(None)):
+def save_profile(request: Request, name: str = Form(...), signature: UploadFile | None = File(None)):
     name = name.strip()
     if not name or len(name) > 160:
         raise ValueError('Introduce tu nombre completo (máximo 160 caracteres).')
+    user_id = request.state.user['id']
+    legacy = not accounts.enabled() and user_id == 'owner'
     assets={}
     if signature and signature.filename:
         raw = signature.file.read(5_000_001)
@@ -163,15 +338,17 @@ def save_profile(name: str = Form(...), signature: UploadFile | None = File(None
                 im.load()
                 out = BytesIO()
                 im.convert('RGBA').save(out, format='PNG')
-                temp = DATA / 'signature.tmp'
-                temp.write_bytes(out.getvalue())
-                temp.replace(DATA / 'signature.png')
-                assets['signature']=out.getvalue()
+                if legacy:
+                    temp = DATA / 'signature.tmp'
+                    temp.write_bytes(out.getvalue())
+                    temp.replace(DATA / 'signature.png')
+                assets['signature' if legacy else 'signatures/' + user_id]=out.getvalue()
         except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
             raise ValueError('No se puede leer la imagen de firma.') from exc
-    atomic_json(DATA / 'profile.json', {'name': name})
-    open_store(DATA).bundle('settings','profile',{'name':name},assets)
-    return profile()
+    if legacy:
+        atomic_json(DATA / 'profile.json', {'name': name})
+    open_store(DATA).bundle('settings' if legacy else 'profile', 'profile' if legacy else user_id, {'name':name}, assets)
+    return user_profile(user_id)
 
 
 class Company(BaseModel):
@@ -198,7 +375,7 @@ def save_company(payload: Company):
     normalized=lambda v:re.sub(r'[\s.\-]','',v).upper()
     existing=next((e for e in db.all('company') if normalized(e['cif'])==normalized(payload.cif)),None)
     if not existing and payload.id: existing=db.get('company',payload.id)
-    key=existing['id'] if existing else uuid.uuid4().hex
+    key=existing['id'] if existing else uuid.uuid5(uuid.NAMESPACE_URL, 'certicoex/company/' + normalized(payload.cif)).hex
     return db.put('company',key,{'id':key,'name':payload.name,'cif':payload.cif})
 
 
@@ -386,9 +563,10 @@ def clean_jobs():
 
 
 @app.post('/api/generate')
-def generate(payload: Batch):
+def generate(payload: Batch, request: Request):
     template = template_path(payload.template_id)
-    current = profile()
+    user_id = request.state.user['id']
+    current = user_profile(user_id)
     if not current['name'] or not current['has_signature']:
         raise ValueError('Guarda tu nombre y una imagen de firma en el perfil del técnico.')
     seen = set()
@@ -398,7 +576,7 @@ def generate(payload: Batch):
             raise ValueError('Hay documentos de identidad repetidos. Corrige el listado antes de generar.')
         seen.add(dni)
     if not retains_students():
-        return generate_temporary(payload, template, current)
+        return generate_temporary(payload, template, current, user_id)
     clean_jobs()
     key = uuid.uuid4().hex
     folder = DATA / 'jobs' / key
@@ -410,7 +588,7 @@ def generate(payload: Batch):
     db=open_store(DATA)
     meta=db.get('template',payload.template_id,{})
     filename=document_name(meta.get('name','Curso'),payload.company,d)
-    render_batch(template, students, common, db.asset('signature'), output)
+    render_batch(template, students, common, profile_signature(db, user_id), output)
     result = {'word': f'/api/files/{key}/docx', 'count': len(students), 'pdf': None, 'pages': None, 'filename':filename}
     try:
         _, pages = convert_pdf(output, folder)
@@ -434,7 +612,7 @@ def generate(payload: Batch):
     return result
 
 
-def generate_temporary(payload, template, current):
+def generate_temporary(payload, template, current, user_id):
     key = uuid.uuid4().hex
     db = open_store(DATA)
     meta = db.get('template', payload.template_id, {})
@@ -447,7 +625,7 @@ def generate_temporary(payload, template, current):
     with TemporaryDirectory(prefix='certicoex-certificates-') as temporary:
         folder = Path(temporary)
         output = folder / 'certificados.docx'
-        render_batch(template, [s.model_dump() for s in payload.students], common, db.asset('signature'), output)
+        render_batch(template, [s.model_dump() for s in payload.students], common, profile_signature(db, user_id), output)
         files = {'docx': output.read_bytes()}
         try:
             pdf, pages = convert_pdf(output, folder)
@@ -456,26 +634,26 @@ def generate_temporary(payload, template, current):
         except RuntimeError as exc:
             result['warning'] = str(exc)
     # No student metadata, certificates or previews are written to the database.
-    temporary_jobs.put(key, files, filename)
+    temporary_jobs.put(key, files, filename, owner=user_id)
     if not payload.preview:
         save_company(Company(name=payload.company, cif=payload.cif))
     return result
 
 
 @app.delete('/api/files/{key}')
-def delete_temporary_files(key: str):
+def delete_temporary_files(key: str, request: Request):
     if not re.fullmatch(r'[a-f0-9]{32}', key):
         raise HTTPException(404)
-    temporary_jobs.delete(key)
+    temporary_jobs.delete(key, owner=request.state.user['id'])
     return {'deleted': True}
 
 
 @app.get('/api/files/{key}/{kind}')
-def download(key: str, kind: str, inline: bool = False):
+def download(key: str, kind: str, request: Request, inline: bool = False):
     if not re.fullmatch(r'[a-f0-9]{32}', key) or kind not in ('pdf', 'docx'):
         raise HTTPException(404)
     if not retains_students():
-        job = temporary_jobs.get(key)
+        job = temporary_jobs.get(key, owner=request.state.user['id'])
         if not job or kind not in job['files']:
             raise HTTPException(404, 'Archivo eliminado o caducado. Vuelve a generar los certificados.')
         return Response(job['files'][kind], media_type='application/pdf' if kind == 'pdf' else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',

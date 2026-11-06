@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import os
+from threading import BoundedSemaphore
 from zipfile import ZipFile, BadZipFile
 
 from docx import Document
@@ -16,6 +17,7 @@ from PIL import Image
 
 FIELDS = {'NOMBRE', 'DNI/NIE', 'EMPRESA', 'CIF', 'HORAS', 'FECHA', 'TECNICO', 'FIRMA'}
 SIGNATURE_MARKER = 'certicoex_signature'
+_OFFICE_SLOT = BoundedSemaphore(1)
 
 
 def check_zip(data: bytes):
@@ -259,6 +261,12 @@ def office_binary():
 
 
 def convert_pdf(docx: Path, outdir: Path):
+    # Department users share a small server; run one LibreOffice conversion at a time.
+    with _OFFICE_SLOT:
+        return _convert_pdf(docx, outdir)
+
+
+def _convert_pdf(docx: Path, outdir: Path):
     binary = office_binary()
     if not binary:
         raise RuntimeError('Falta LibreOffice para generar el PDF. El Word sí está disponible.')

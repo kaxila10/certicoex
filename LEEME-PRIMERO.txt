@@ -29,6 +29,7 @@ Los alumnos no se archivan. Guarda los documentos descargados donde corresponda
 y pulsa "Borrar alumnos y archivos temporales". Las descargas caducan en un
 máximo de 30 minutos y pueden perderse antes al reiniciar o generar muchos lotes.
 No necesitas crear una cuenta. No es un servicio web publicado en Internet.
-Esta versión es para uso personal; no tiene cuentas de varios técnicos.
+El uso local sin acceso protegido tiene un perfil. La instalación protegida
+en Render admite usuarios individuales con plantillas y empresas compartidas.
 No se han probado los lanzadores en un Windows o Mac reales: la aplicación
 y los documentos sí se han validado en Linux.

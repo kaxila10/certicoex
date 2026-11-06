@@ -7,6 +7,7 @@ let toastTimer;
 const COMPANY_KEY = 'certicoex.companies.v1';
 let companies = [];
 let currentDraftId = null, historyOffset = 0;
+let signedInUser = null, resetUserId = null;
 function showCompanies(selected = '') {
   $('saved-company').replaceChildren(new Option('Nueva empresa / introducir datos', ''));
   companies.sort((a,b) => a.name.localeCompare(b.name,'es')).forEach(c => $('saved-company').add(new Option(`${c.name} · ${c.cif}`,c.id)));
@@ -32,10 +33,13 @@ async function saveCompany(notify = true) {
 }
 function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 6500); }
 async function api(url, options = {}) {
+  if (signedInUser) options.headers = {...options.headers, 'X-Certicoex-User': signedInUser.id};
   const response = await fetch(url, options);
   let data;
   try { data = await response.json(); } catch { throw new Error('No se puede leer la respuesta del servidor.'); }
   if (!response.ok) {
+    if (data.code === 'session_changed') { location.reload(); throw new Error('La cuenta activa ha cambiado.'); }
+    if (response.status === 401) { location.replace('/login'); throw new Error('Inicia sesión de nuevo.'); }
     let message = data.detail;
     if (Array.isArray(message)) message = message.map(e => `${e.loc.slice(1).join(' · ')}: ${e.msg}`).join('\n');
     throw new Error(message || 'No se pudo completar la operación.');
@@ -337,14 +341,78 @@ $('apply-import').onclick = () => run(async () => {
 });
 $('preview').onclick = () => run(() => generate(true)); $('generate').onclick = () => run(() => generate(false));
 run(async () => {
+  const actor = await api('/api/auth/me'); signedInUser = actor;
   const [p, , health] = await Promise.all([api('/api/profile'), loadTemplates(), api('/api/health'), migrateCompanies()]);
   profile = p; updateProfile(); $('trial-notice').hidden = !health.storage_ephemeral;
+  signedInUser = actor;
+  $('account-bar').hidden = !actor.accounts_enabled;
+  $('account-username').textContent = actor.username;
+  $('open-users').hidden = !actor.accounts_enabled || actor.role !== 'admin';
   $('archive-tools').hidden = !health.retains_students;
   $('temporary-tools').hidden = !!health.retains_students;
   if (!health.retains_students) {
     $('storage-footer').textContent = 'Alumnos sin historial · Descargas temporales · Guarda los certificados en tu Google Drive.';
   }
 });
+
+window.addEventListener('pageshow', event => { if (event.persisted) location.reload(); });
+window.addEventListener('storage', event => { if (event.key === 'certicoex.auth-change') location.reload(); });
+$('logout').onclick = () => run(async () => {
+  if (busy || importReading) return toast('Espera a que termine la operación antes de cerrar sesión.');
+  if (students.length && !confirm('¿Cerrar sesión? Se vaciará el listado y se eliminarán tus descargas temporales. Guarda los documentos que necesites.')) return;
+  await api('/api/auth/logout', {method:'POST'});
+  try { localStorage.setItem('certicoex.auth-change', String(Date.now())); } catch {}
+  location.replace('/login');
+});
+$('open-account').onclick = () => { $('password-form').reset(); $('password-dialog').showModal(); };
+$('password-form').onsubmit = event => { event.preventDefault(); run(async () => {
+  if ($('new-password').value !== $('repeat-password').value) throw new Error('Las contraseñas nuevas no coinciden.');
+  const button = $('password-save'); button.disabled = true;
+  try {
+    await api('/api/auth/password', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({current_password:$('current-password').value,new_password:$('new-password').value})});
+    $('password-form').reset(); $('password-dialog').close(); toast('Contraseña actualizada. Las otras sesiones de tu cuenta han quedado cerradas.');
+  } finally { button.disabled = false; }
+}); };
+
+async function loadUsers() {
+  const records = await api('/api/users'); $('users-list').replaceChildren();
+  records.forEach(record => {
+    const {card, actions} = trainingCard(record.username, `${record.role === 'admin' ? 'Administrador' : 'Técnico'} · ${record.active ? 'Activo' : 'Desactivado'}`);
+    if (record.id !== signedInUser.id) {
+      actions.append(action(record.active ? 'Desactivar' : 'Activar', async () => {
+        if (!confirm(`¿${record.active ? 'Desactivar' : 'Activar'} la cuenta «${record.username}»?`)) return;
+        await api(`/api/users/${record.id}`, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({active:!record.active})});
+        await loadUsers();
+      }), action('Restablecer contraseña', async () => {
+        resetUserId = record.id; $('reset-user-label').textContent = record.username;
+        $('reset-password-form').reset(); $('reset-password').type = 'password'; $('reset-password-dialog').showModal();
+      }));
+    }
+    $('users-list').append(card);
+  });
+}
+$('open-users').onclick = () => run(async () => { await loadUsers(); $('users-dialog').showModal(); });
+$('new-user-form').onsubmit = event => { event.preventDefault(); run(async () => {
+  const button = $('create-user'); button.disabled = true;
+  try {
+    const record = await api('/api/users', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('new-username').value,password:$('initial-password').value})});
+    $('new-user-form').reset(); $('initial-password').type = 'password'; await loadUsers();
+    toast(`Cuenta «${record.username}» creada. El técnico podrá guardar su nombre y firma en «Mi perfil».`);
+  } finally { button.disabled = false; }
+}); };
+function randomPassword(input) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  input.value = [...crypto.getRandomValues(new Uint8Array(20))].map(n => alphabet[n & 63]).join(''); input.type = 'text';
+}
+$('generate-password').onclick = () => randomPassword($('initial-password'));
+$('generate-reset-password').onclick = () => randomPassword($('reset-password'));
+$('reset-password-form').onsubmit = event => { event.preventDefault(); run(async () => {
+  const button = $('reset-password-save'); button.disabled = true;
+  try {
+    await api(`/api/users/${resetUserId}`, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:$('reset-password').value})});
+    $('reset-password-form').reset(); $('reset-password-dialog').close(); toast('Contraseña restablecida. Las sesiones anteriores de esa cuenta se han cerrado.');
+  } finally { button.disabled = false; }
+}); };
 
 $('template').addEventListener('change', () => { $('hours').value = templates.find(t => t.id === $('template').value)?.hours ?? ''; dirty(); });
 $('open-course').onclick = () => {
