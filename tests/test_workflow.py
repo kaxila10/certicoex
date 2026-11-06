@@ -93,6 +93,31 @@ class Workflow(unittest.TestCase):
         self.assertEqual(response.json()['mapping']['dni'],1)
         self.assertEqual(response.json()['rows'][0][1],'00000000A')
 
+    def test_template_catalog_filename_and_download_survive_cache_loss(self):
+        original = main.template_path(self.template).read_bytes()
+        from app import storage
+        storage._open.cache_clear()
+        catalog = self.client.get('/api/templates').json()
+        meta = next(t for t in catalog if t['id'] == self.template)
+        self.assertEqual(meta['filename'], 'plantilla.docx')
+        renamed = self.client.put(f'/api/templates/{self.template}/settings',
+                                  json={'name': 'Curso Art. 19', 'hours': 8})
+        self.assertEqual(renamed.json()['filename'], 'plantilla.docx')
+        main.template_path(self.template).unlink()
+        response = self.client.get(f'/api/templates/{self.template}/file')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, original)
+        self.assertIn('plantilla.docx', response.headers['content-disposition'])
+        self.assertIn('no-store', response.headers['cache-control'])
+        # Old metadata did not preserve the original filename; still provide the Word.
+        meta = main.open_store(self.data).get('template', self.template)
+        meta.pop('filename')
+        main.open_store(self.data).put('template', self.template, meta)
+        response = self.client.get(f'/api/templates/{self.template}/file')
+        self.assertEqual(response.content, original)
+        self.assertIn('Curso Art. 19.docx', response.headers['content-disposition'])
+        self.assertEqual(self.client.get('/api/templates/' + 'a' * 32 + '/file').status_code, 404)
+
     def test_validation_and_duplicate_identity(self):
         batch=self.batch();batch['students'][1]['dni']='12.345.678-z'
         self.assertEqual(self.client.post('/api/generate',json=batch).status_code,422)

@@ -35,7 +35,7 @@ def login(page, username, password=PASSWORD):
     page.locator('#login-password').fill(password)
     page.locator('#login-submit').click()
     expect(page.locator('#account-username')).to_have_text(username)
-    page.wait_for_function("document.querySelector('#template').options.length > 1")
+    expect(page.locator('#template option').nth(1)).to_be_attached()
 
 
 def profile(page, name, signature, title='TÉCNICO EN PRL', salutation='D.'):
@@ -110,24 +110,38 @@ with tempfile.TemporaryDirectory(prefix='certicoex-accounts-browser-') as direct
                 expect(owner.locator('#users-list .saved-training')).to_have_count(4)
                 owner.locator('[data-close=users-dialog]').click()
                 login(a, 'tecnico2'); login(b, 'tecnico3')
+                a.locator('#hours').fill('5')
+                a.locator('#open-templates').click()
+                expect(a.locator('#templates-dialog')).to_be_visible()
+                expect(a.locator('#hours')).to_have_value('5')
+                card = a.locator('#templates-list .saved-training').filter(has=a.locator('h3', has_text='Plantilla compartida adaptable'))
+                expect(card).to_contain_text('Archivo Word: plantilla.docx')
+                with a.expect_download() as saved:
+                    card.get_by_role('link', name='Descargar Word').click()
+                downloaded = saved.value
+                assert downloaded.suggested_filename == 'plantilla.docx'
+                assert Path(downloaded.path()).read_bytes() == source.getvalue()
+                card.get_by_role('button', name='Usar plantilla').click()
+                expect(a.locator('#templates-dialog')).not_to_be_visible()
+                expect(a.locator('#template option:checked')).to_have_text('Plantilla compartida adaptable')
                 expect(a.locator('#open-users')).to_be_hidden()
                 expect(a.locator('#archive-tools')).to_be_hidden()
                 assert a_context.request.get(BASE + '/api/users').status == 403
                 profile(a, 'Técnico Alfa', blue)
                 profile(b, 'Técnico Beta', red, 'TÉCNICA SUPERIOR EN PRL', 'Dña.')
-                a.reload(); a.wait_for_function("document.querySelector('#template').options.length > 1")
+                a.reload(); expect(a.locator('#template option').nth(1)).to_be_attached()
                 a.locator('#open-profile').click()
                 expect(a.locator('#technician-name')).to_have_value('Técnico Alfa')
                 expect(a.locator('#technician-title')).to_have_value('TÉCNICO EN PRL')
                 expect(a.locator('#technician-salutation')).to_have_value('D.')
                 a.locator('[data-close=profile-dialog]').click()
-                b.reload(); b.wait_for_function("document.querySelector('#template').options.length > 1")
+                b.reload(); expect(b.locator('#template option').nth(1)).to_be_attached()
                 b.locator('#open-profile').click()
                 expect(b.locator('#technician-title')).to_have_value('TÉCNICA SUPERIOR EN PRL')
                 expect(b.locator('#technician-salutation')).to_have_value('Dña.')
                 b.locator('[data-close=profile-dialog]').click()
                 a_word, a_pdf = emit(a)
-                b.reload(); b.wait_for_function("document.querySelector('#template').options.length > 1")
+                b.reload(); expect(b.locator('#template option').nth(1)).to_be_attached()
                 expect(b.locator('#saved-company')).to_contain_text('Empresa compartida de prueba')
                 b_word, b_pdf = emit(b)
                 for context, word, pdf, own_name, other_name, title, salutation in (
@@ -185,6 +199,12 @@ with tempfile.TemporaryDirectory(prefix='certicoex-accounts-browser-') as direct
                 expect(a.locator('#login-form')).to_be_visible()
                 expect(other_tab.locator('#login-form')).to_be_visible()
                 login(a,'tecnico2','own-test-only-password-789')
+                a.set_viewport_size({'width':390,'height':1000})
+                a.locator('#open-templates').click()
+                expect(a.locator('#templates-dialog')).to_be_visible()
+                assert a.locator('#templates-dialog').evaluate('(d) => d.scrollWidth <= d.clientWidth')
+                a.screenshot(path=str(ROOT.parent / 'work' / 'templates-mobile.png'), full_page=True)
+                a.locator('[data-close=templates-dialog]').click()
                 for page in (a, owner):
                     for width in (390,768,1440):
                         page.set_viewport_size({'width':width,'height':1000})

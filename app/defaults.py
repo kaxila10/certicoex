@@ -16,4 +16,4 @@ def seed_templates(data: Path, source: Path):
         key = hashlib.sha256(content).hexdigest()[:32]
         (target / (key + '.docx')).write_bytes(content)
         name = path.stem.replace('_', ' ')
-        (target / (key + '.json')).write_text(json.dumps({'id':key, 'name':name, 'fields':fields}, ensure_ascii=False), encoding='utf8')
+        (target / (key + '.json')).write_text(json.dumps({'id':key, 'name':name, 'filename':path.name, 'fields':fields}, ensure_ascii=False), encoding='utf8')

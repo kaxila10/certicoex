@@ -463,6 +463,26 @@ function trainingCard(title, detail) {
   return {card,actions};
 }
 function action(label, task) { const button = document.createElement('button'); button.className = 'button secondary small'; button.textContent = label; button.onclick = () => run(task); return button; }
+async function showTemplates() {
+  await loadTemplates($('template').value);
+  $('templates-list').replaceChildren();
+  if (!templates.length) $('templates-list').textContent = 'Todavía no hay plantillas guardadas.';
+  templates.forEach(template => {
+    const detail = template.filename ? `Archivo Word: ${template.filename}` : 'Nombre original del archivo no registrado.';
+    const {card,actions} = trainingCard(template.name, detail);
+    const download = document.createElement('a');
+    download.className = 'button secondary small'; download.textContent = 'Descargar Word';
+    download.href = `/api/templates/${template.id}/file`; download.setAttribute('download', '');
+    actions.append(action('Usar plantilla', async () => {
+      $('template').value = template.id; $('hours').value = template.hours ?? '';
+      dirty(); summary(); $('templates-dialog').close();
+    }), download);
+    $('templates-list').append(card);
+  });
+  $('templates-dialog').showModal();
+}
+$('open-templates').onclick = () => run(showTemplates);
+$('add-template-from-list').onclick = () => { $('templates-dialog').close(); $('template-dialog').showModal(); };
 async function loadDrafts() {
   const records = await api('/api/drafts'); $('draft-list').replaceChildren();
   if (!records.length) $('draft-list').textContent = 'Todavía no tienes borradores.';

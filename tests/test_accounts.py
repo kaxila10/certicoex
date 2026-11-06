@@ -152,6 +152,11 @@ class Accounts(unittest.TestCase):
     def test_templates_companies_shared_and_management_restricted(self):
         a, actor = self.technician('tecnico-a'); b, _ = self.technician('tecnico-b')
         self.assertIn(self.template, [row['id'] for row in a.get('/api/templates').json()])
+        template_url = f'/api/templates/{self.template}/file'
+        self.assertEqual(a.get(template_url).content, b.get(template_url).content)
+        self.assertEqual(a.get(template_url).status_code, 200)
+        fresh = TestClient(main.app); self.extra.append(fresh)
+        self.assertEqual(fresh.get(template_url).status_code, 401)
         with ThreadPoolExecutor(2) as pool:
             saved = list(pool.map(lambda client: client.post('/api/companies', json={'name': 'Empresa compartida', 'cif': 'B12345678'}), (a, b)))
         self.assertTrue(all(response.status_code == 200 for response in saved))

@@ -23,7 +23,7 @@ from .access import authorized, configured
 from .defaults import seed_templates
 from .storage import open_store, StorageUnavailable
 from .validation import review_students
-from .naming import document_name, disposition
+from .naming import clean_part, document_name, disposition
 from .rosters import parse_text, tabular
 from .roster_files import extract_list
 from .temporary_jobs import temporary_jobs, LIFETIME_SECONDS
@@ -249,11 +249,14 @@ def template_path(key):
     return path
 
 
-def store_template(data, name):
+def store_template(data, name, filename=None):
     fields = inspect_template(data)
     key = uuid.uuid4().hex
     (DATA / 'templates' / (key + '.docx')).write_bytes(data)
     meta = {'id': key, 'name': name.strip()[:120] or 'Curso sin título', 'fields': fields}
+    if filename:
+        original = filename.replace('\\', '/').rsplit('/', 1)[-1]
+        meta['filename'] = clean_part(Path(original).stem, 200, 'Plantilla') + '.docx'
     atomic_json(DATA / 'templates' / (key + '.json'), meta)
     db = open_store(DATA)
     db.bundle('template',key,meta,{'templates/'+key:data})
@@ -278,6 +281,16 @@ def templates():
     return open_store(DATA).all('template')
 
 
+@app.get('/api/templates/{key}/file')
+def download_template(key: str):
+    path = template_path(key)
+    meta = open_store(DATA).get('template', key, {})
+    name = Path(meta['filename']).stem if meta.get('filename') else meta.get('name', 'Plantilla')
+    name = clean_part(name, 200, 'Plantilla')
+    return FileResponse(path, media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                        headers={'Content-Disposition': disposition(name, 'docx')})
+
+
 @app.post('/api/templates')
 def upload_template(file: UploadFile = File(...), name: str = Form(...)):
     if not (file.filename or '').lower().endswith('.docx'):
@@ -286,7 +299,7 @@ def upload_template(file: UploadFile = File(...), name: str = Form(...)):
     if len(data) > 10_000_000:
         raise ValueError('La plantilla supera 10 MB.')
     try:
-        return store_template(data, name)
+        return store_template(data, name, file.filename)
     except (KeyError, TypeError) as exc:
         raise ValueError('No se puede leer esta plantilla Word.') from exc
 
