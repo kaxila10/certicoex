@@ -7,7 +7,7 @@ Esta configuración prepara un único servicio Docker de prueba. No publica nada
 1. En Render, conecta GitHub y autoriza el repositorio `kaxila10/certicoex`.
 2. Cuando la rama de despliegue esté subida a GitHub, elige **New → Blueprint** y selecciona ese repositorio y esa rama. El fichero es `render.yaml`.
 3. Revisa que el servicio `certicoex` usa Docker, región Frankfurt y **plan Free**, si tu cuenta permite ese plan. No selecciones un plan de pago para esta prueba. Si Render no ofrece Free o muestra un coste, detente antes de confirmar.
-4. Tras crear el servicio, espera a que aparezca **Live**. La construcción incluye LibreOffice y puede tardar varios minutos.
+4. Tras crear el servicio, espera a que aparezca **Live**. La construcción incluye LibreOffice, Tesseract (español e inglés) y Poppler para leer fotos y PDF escaneados, y puede tardar varios minutos.
 5. En el servicio, abre **Environment**: el usuario es `tecnico` y la contraseña es el valor generado de `CERTICOEX_PASSWORD`. Se configura en Render, no en el código ni en el chat. Si Render oculta el valor generado, puedes sustituirlo ahí por una contraseña propia de al menos 16 caracteres y guardar el cambio.
 6. Abre la dirección HTTPS que Render muestre para el servicio. El navegador pedirá usuario y contraseña. Después, entra en **Mi perfil** y guarda tu nombre y firma.
 

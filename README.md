@@ -1,6 +1,6 @@
 # Certicoex
 
-Aplicación personal para generar certificados PRL desde plantillas Word. Importa alumnos desde Excel `.xlsx`, pega listados o introdúcelos a mano, corrige los datos y obtén **un Word y un PDF con todo el lote**. Incluye perfil del técnico con firma en imagen y vista previa de todos los alumnos juntos.
+Aplicación personal para generar certificados PRL desde plantillas Word. Pega listados de correo o WhatsApp, lee PDF o fotos de listas impresas, importa Excel `.xlsx` o introduce los alumnos a mano. Revisa los datos y obtén **un Word y un PDF con todo el lote**. Incluye perfil del técnico con firma en imagen y vista previa de todos los alumnos juntos.
 
 Para usar la descarga de escritorio, consulta `LEEME-PRIMERO.txt`. Con Python 3.12+ y LibreOffice instalados, `INICIAR.bat` (Windows) o `bash INICIAR.command` (Mac/Linux) prepara las dependencias y abre la app en el navegador de ese ordenador. Los lanzadores de Windows/Mac no se han ejecutado en esos sistemas; la aplicación y sus documentos se han validado en Linux.
 
@@ -43,7 +43,13 @@ Este comando específico espera el rótulo «TÉCNICO EN PRL» y una sola imagen
 
 ## Alumnos y almacenamiento
 
-El Excel usa su hoja activa y la primera fila de encabezados. Se muestran hoja, número de filas y selectores de nombre, apellidos, segundo apellido y DNI/NIE. Puedes pegar celdas con tabuladores o separadores `;` o `,`, o una línea por alumno terminada en su documento. La importación añade al listado existente. Se admite hasta 500 alumnos por lote, para el uso habitual de 2–50.
+La pestaña inicial es «Pegar correo / WhatsApp». Admite DNI/NIE al principio o al final de la línea, documentos con puntos o guiones, encabezados como «DNI/NIF TRABAJADOR FORMACIÓN PRL», nombres «APELLIDOS, NOMBRE» y nombre/documento en dos líneas consecutivas. Separa las fechas del listado sin cambiar la fecha de formación del formulario. Conserva las líneas ambiguas o no reconocidas en un bloque visible para corregirlas o añadir sus alumnos a mano; no inventa documentos ni corrige automáticamente su letra.
+
+«PDF o foto» lee PDF con texto seleccionable y utiliza OCR local para páginas escaneadas y fotos de texto impreso (PNG, JPG, WebP). Límite: 10 MB, 10 páginas por PDF y 20 megapíxeles por foto. Se pueden consultar y copiar los textos extraídos para corregirlos y volver a leerlos. Los listados manuscritos, borrosos o con una distribución compleja pueden necesitar introducción manual. Comprueba siempre que todos los alumnos del original estén presentes y sus documentos sean correctos. Los archivos se procesan en una carpeta temporal del servidor, que se elimina al terminar; no se envían a servicios de OCR externos.
+
+Para OCR se necesita **Tesseract** (preferiblemente con español e inglés) y, para PDF escaneados, **Poppler** (`pdftoppm`). El Dockerfile de Render los instala. En Debian/Ubuntu: `apt-get install tesseract-ocr tesseract-ocr-spa tesseract-ocr-eng poppler-utils`. En Windows/Mac deben instalarse esas herramientas y añadirse a PATH; también se pueden indicar sus ejecutables con `CERTICOEX_TESSERACT` y `CERTICOEX_PDFTOPPM`. Sin ellas siguen disponibles el texto pegado, Excel y los PDF con texto seleccionable.
+
+El Excel usa su hoja activa y la primera fila de encabezados. Se muestran hoja, número de filas y selectores de nombre, apellidos, segundo apellido y DNI/NIE. También puedes pegar celdas con tabuladores o separadores `;` o `,`. Todas las importaciones pasan por una tabla editable de revisión; solo al pulsar «Añadir al listado» se incorporan al lote actual. Se bloquean filas incompletas y documentos repetidos, incluidos los que ya estén en el lote. La revisión permite corregir, eliminar o añadir filas. Se admite hasta 500 alumnos por lote, para el uso habitual de 2–50.
 
 Se bloquean datos vacíos y documentos repetidos (ignorando puntos, guiones, espacios y mayúsculas). Los formatos poco habituales producen un aviso; no se comprueba la letra de control ni se verifica la identidad.
 
@@ -59,9 +65,10 @@ LibreOffice conserva las propiedades del Word, secciones y cabeceras; la app ind
 .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m unittest discover -s tests -v
 CERTICOEX_TEST_PDF=1 .venv/bin/python -m unittest discover -s tests -v
+CERTICOEX_TEST_PDF=1 CERTICOEX_TEST_OCR=1 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-La última orden incluye conversiones reales Word→PDF y requiere LibreOffice. Las pruebas cubren importación de 50 alumnos, marcadores fragmentados, formato y caracteres XML, perfil/firma, duplicados, validación, origen de solicitudes y disponibilidad del Word si falla el PDF. Usan datos ficticios en carpetas temporales.
+Las dos últimas órdenes incluyen conversiones reales Word→PDF y requieren LibreOffice. La última comprueba además lectura real de foto impresa y PDF escaneado y requiere Tesseract y Poppler. Las pruebas cubren listados de correo/WhatsApp, nombres con coma, fechas y líneas no reconocidas, acceso a la importación, importación de 50 alumnos, marcadores fragmentados, formato y caracteres XML, perfil/firma, duplicados, validación, origen de solicitudes y disponibilidad del Word si falla el PDF. Usan datos ficticios en carpetas temporales.
 
 En una máquina con Playwright y Chromium instalados, `python3 scripts/browser_smoke.py` prueba el flujo completo en un navegador con un perfil temporal, sin modificar el perfil real. Requiere haber cargado al menos una plantilla en `.local/data/templates`. Las capturas y ejemplos generados se guardan en `.local/validation/` y contienen datos ficticios. El navegador automatizado es una herramienta de desarrollo opcional, no una dependencia de la app.
 

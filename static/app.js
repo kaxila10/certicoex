@@ -1,5 +1,7 @@
 const $ = id => document.getElementById(id);
 let templates = [], profile = {}, students = [], imported = null, busy = false, revision = 0;
+let importPreview = [];
+let importReading = false;
 let toastTimer;
 const COMPANY_KEY = 'certicoex.companies.v1';
 let companies = [];
@@ -66,12 +68,12 @@ async function loadTemplates(selected) {
   summary();
 }
 function cleanDni(value) { return value.toUpperCase().replace(/[\s.\-]/g, ''); }
-function validateStudents() {
+function validateRows(list, body, status, existing = []) {
   const counts = new Map();
-  students.forEach(s => { const dni = cleanDni(s.dni); if (dni) counts.set(dni, (counts.get(dni) || 0) + 1); });
+  [...list, ...existing].forEach(s => { const dni = cleanDni(s.dni); if (dni) counts.set(dni, (counts.get(dni) || 0) + 1); });
   let missing = 0, duplicate = 0, unusual = 0, wrongLetter = 0;
-  [...$('student-rows').children].forEach((row, i) => {
-    const s = students[i], inputs = row.querySelectorAll('input');
+  [...body.children].forEach((row, i) => {
+    const s = list[i], inputs = row.querySelectorAll('input');
     const emptyName = !s.name.trim(), emptyDni = !s.dni.trim(), repeated = (counts.get(cleanDni(s.dni)) || 0) > 1;
     inputs[0].classList.toggle('invalid', emptyName); inputs[1].classList.toggle('invalid', emptyDni || repeated);
     inputs[0].setAttribute('aria-invalid', String(emptyName)); inputs[1].setAttribute('aria-invalid', String(emptyDni || repeated));
@@ -93,9 +95,14 @@ function validateStudents() {
   if (duplicate) messages.push(`${duplicate} fila(s) con DNI/NIE repetido.`);
   if (unusual) messages.push(`${unusual} documento(s) con formato poco habitual: revísalos. Comprueba que son los documentos correctos.`);
   if (wrongLetter) messages.push(`${wrongLetter} documento(s) con letra de control incorrecta. Revísalos antes de generar.`);
-  $('student-validation').classList.toggle('review-ok', messages.length === 0);
-  $('student-validation').textContent = messages.join(' ') || (students.length ? 'Listado revisado: sin datos vacíos, duplicados ni errores de letra de DNI/NIE.' : '');
+  status.classList.toggle('review-ok', messages.length === 0);
+  status.textContent = messages.join(' ') || (list.length ? 'Listado revisado: sin datos vacíos, duplicados ni errores de letra de DNI/NIE.' : '');
   return !missing && !duplicate;
+}
+function validateStudents() {
+  const valid = validateRows(students, $('student-rows'), $('student-validation'));
+  if (imported) validateImport();
+  return valid;
 }
 function renderStudents() {
   $('student-rows').replaceChildren();
@@ -119,10 +126,16 @@ function renderStudents() {
   summary(); validateStudents();
 }
 function showImport(data) {
-  if (!data.rows.length) throw new Error('El listado no contiene alumnos.');
   imported = data;
   $('mapping-panel').hidden = false;
-  $('import-info').textContent = `${data.rows.length} filas detectadas${data.sheet ? ` en la hoja «${data.sheet}»` : ''}. Confirma las columnas antes de añadirlas.`;
+  $('import-info').textContent = `${data.rows.length} alumnos detectados${data.sheet ? ` en la hoja «${data.sheet}»` : ''}${data.page_count ? ` · ${data.page_count} página(s)` : ''}. Revisa y corrige los datos antes de añadirlos al listado.`;
+  $('column-mapping').hidden = data.mode === 'text';
+  $('import-warnings').replaceChildren();
+  (data.warnings || []).forEach(message => { const p = document.createElement('p'); p.textContent = message; $('import-warnings').append(p); });
+  $('import-unparsed').hidden = !data.unparsed?.length;
+  $('unparsed-lines').textContent = (data.unparsed || []).map(line => `Línea ${line.line}: ${line.text}`).join('\n');
+  $('import-source').hidden = !data.extracted_text;
+  $('extracted-text').value = data.extracted_text || '';
   ['name', 'dni', 'surname', 'surname2'].forEach(field => {
     const select = $('map-' + field);
     select.replaceChildren(new Option(field.startsWith('surname') ? 'No usar / ya incluido' : 'Selecciona columna', '-1'));
@@ -139,19 +152,76 @@ function mappedStudents() {
   return imported.rows.map(row => ({ name: [row[map.name], row[map.surname], row[map.surname2]].filter(Boolean).join(' '), dni: row[map.dni] || '' }));
 }
 function importSample() {
-  try { const s = mappedStudents()[0]; $('import-sample').textContent = `Primera fila: ${s.name || '(sin nombre)'} · ${s.dni || '(sin documento)'}`; }
-  catch { $('import-sample').textContent = 'Selecciona las columnas de nombre y documento.'; }
+  try {
+    importPreview = mappedStudents();
+    $('import-sample').textContent = 'Puedes editar o eliminar cualquier fila. Los documentos con avisos se conservan tal como se han leído.';
+    renderImportPreview();
+  } catch (error) {
+    importPreview = []; $('import-rows').replaceChildren();
+    $('import-sample').textContent = error.message; $('apply-import').disabled = true;
+  }
+}
+function validateImport() {
+  const valid = validateRows(importPreview, $('import-rows'), $('import-validation'), students);
+  const tooMany = students.length + importPreview.length > 500;
+  if (tooMany) $('import-validation').textContent += ' El lote admite hasta 500 alumnos.';
+  $('apply-import').disabled = !valid || !importPreview.length || tooMany;
+  $('apply-import').textContent = `Añadir ${importPreview.length} alumno(s) al listado`;
+}
+function renderImportPreview() {
+  $('import-rows').replaceChildren();
+  importPreview.forEach((student, i) => {
+    const row = document.createElement('tr'), number = document.createElement('td');
+    number.textContent = i + 1; row.append(number);
+    ['name', 'dni'].forEach(field => {
+      const td = document.createElement('td'), input = document.createElement('input');
+      input.value = student[field]; input.maxLength = field === 'name' ? 180 : 30;
+      input.autocomplete = 'off'; input.spellcheck = false;
+      input.setAttribute('aria-label', `${field === 'name' ? 'Nombre' : 'DNI/NIE'} a importar ${i + 1}`);
+      input.oninput = () => { student[field] = input.value; validateImport(); };
+      td.append(input); row.append(td);
+    });
+    const td = document.createElement('td'), remove = document.createElement('button');
+    remove.type = 'button'; remove.className = 'remove-row'; remove.textContent = '×';
+    remove.setAttribute('aria-label', `Quitar de la importación al alumno ${i + 1}`);
+    remove.onclick = () => { importPreview.splice(i, 1); renderImportPreview(); };
+    td.append(remove); row.append(td); $('import-rows').append(row);
+  });
+  validateImport();
+}
+async function readImport(task, message) {
+  if (importReading) return;
+  importReading = true; imported = null; importPreview = []; $('mapping-panel').hidden = true;
+  const controls = ['parse-paste', 'excel-file', 'document-file', 'paste-text', 'apply-import', 'cancel-import'];
+  controls.forEach(id => $(id).disabled = true);
+  $('import-reading').textContent = message;
+  try { showImport(await task()); }
+  finally {
+    controls.forEach(id => $(id).disabled = false);
+    $('import-reading').textContent = '';
+    importReading = false;
+    if (imported) validateImport();
+    else $('apply-import').disabled = true;
+  }
 }
 async function importExcel(file) {
   if (!file) return;
   const data = new FormData(); data.append('file', file);
-  showImport(await api('/api/import/excel', {method:'POST', body:data}));
-  $('excel-file').value = '';
+  try { await readImport(() => api('/api/import/excel', {method:'POST', body:data}), 'Leyendo Excel…'); }
+  finally { $('excel-file').value = ''; }
 }
-function setTab(excel) {
-  $('excel-panel').hidden = !excel; $('paste-panel').hidden = excel;
-  $('tab-excel').classList.toggle('selected', excel); $('tab-paste').classList.toggle('selected', !excel);
-  $('tab-excel').setAttribute('aria-selected', String(excel)); $('tab-paste').setAttribute('aria-selected', String(!excel));
+async function importDocument(file) {
+  if (!file) return;
+  const data = new FormData(); data.append('file', file);
+  try { await readImport(() => api('/api/import/document', {method:'POST', body:data}), 'Leyendo el documento… Las fotos y los PDF escaneados pueden tardar un poco.'); }
+  finally { $('document-file').value = ''; }
+}
+function setTab(selected) {
+  ['paste', 'document', 'excel'].forEach(tab => {
+    $(tab + '-panel').hidden = tab !== selected;
+    $('tab-' + tab).classList.toggle('selected', tab === selected);
+    $('tab-' + tab).setAttribute('aria-selected', String(tab === selected));
+  });
 }
 function payload(preview) {
   if (!$('course-form').reportValidity()) return null;
@@ -223,18 +293,27 @@ $('cif').addEventListener('input', () => { $('company-save-status').textContent 
 ['company', 'cif', 'hours', 'course-date', 'template'].forEach(id => $(id).addEventListener('input', () => {dirty(); summary();}));
 $('add-student').onclick = () => { students.push({name:'', dni:''}); dirty(); renderStudents(); $('student-rows').lastChild.querySelector('input').focus(); };
 $('clear-students').onclick = () => { if (confirm('¿Vaciar el listado de alumnos?')) { students = []; dirty(); renderStudents(); } };
-$('tab-excel').onclick = () => setTab(true); $('tab-paste').onclick = () => setTab(false);
+['paste', 'document', 'excel'].forEach(tab => $('tab-' + tab).onclick = () => setTab(tab));
 $('excel-file').onchange = e => run(() => importExcel(e.target.files[0]));
+$('document-file').onchange = e => run(() => importDocument(e.target.files[0]));
 $('drop-zone').onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('excel-file').click(); } };
 ['dragover', 'dragleave', 'drop'].forEach(type => $('drop-zone').addEventListener(type, e => {
   e.preventDefault(); $('drop-zone').classList.toggle('dragging', type === 'dragover');
   if (type === 'drop') run(() => importExcel(e.dataTransfer.files[0]));
 }));
-$('parse-paste').onclick = () => run(async () => showImport(await api('/api/import/paste', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text:$('paste-text').value})})));
+$('parse-paste').onclick = () => run(() => readImport(() => api('/api/import/paste', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text:$('paste-text').value})}), 'Separando nombres y documentos…'));
 ['name', 'dni', 'surname', 'surname2'].forEach(field => $('map-'+field).onchange = importSample);
+$('add-import-student').onclick = () => { importPreview.push({name:'', dni:''}); renderImportPreview(); $('import-rows').lastChild.querySelector('input').focus(); };
+$('cancel-import').onclick = () => { imported = null; importPreview = []; $('mapping-panel').hidden = true; };
+$('correct-extracted').onclick = () => {
+  $('paste-text').value = $('extracted-text').value; setTab('paste');
+  imported = null; importPreview = []; $('mapping-panel').hidden = true; $('paste-text').focus();
+  toast('Corrige el texto y pulsa «Leer listado» para volver a revisarlo.');
+};
 $('apply-import').onclick = () => run(async () => {
-  const rows = mappedStudents(); if (students.length + rows.length > 500) throw new Error('El lote admite hasta 500 alumnos.');
-  students.push(...rows); imported = null; $('mapping-panel').hidden = true; $('paste-text').value = ''; dirty(); renderStudents(); toast(`${rows.length} alumnos añadidos. Revisa sus datos.`);
+  validateImport(); if ($('apply-import').disabled) return;
+  const rows = importPreview.map(s => ({name:s.name.trim(), dni:s.dni.trim()}));
+  students.push(...rows); imported = null; importPreview = []; $('mapping-panel').hidden = true; $('paste-text').value = ''; dirty(); renderStudents(); toast(`${rows.length} alumnos añadidos. Revisa sus datos.`);
 });
 $('preview').onclick = () => run(() => generate(true)); $('generate').onclick = () => run(() => generate(false));
 run(async () => { const [p, , health] = await Promise.all([api('/api/profile'), loadTemplates(), api('/api/health'), migrateCompanies()]); profile = p; updateProfile(); $('trial-notice').hidden = !health.storage_ephemeral; });

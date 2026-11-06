@@ -9,7 +9,7 @@ RUN --mount=type=secret,id=proxy_ca,required=false \
     certicoex_apt_options=''; \
     if [ -f /run/secrets/proxy_ca ]; then certicoex_apt_options='-o Acquire::https::CaInfo=/run/secrets/proxy_ca'; fi; \
     apt-get $certicoex_apt_options update; \
-    apt-get $certicoex_apt_options install -y --no-install-recommends libreoffice-writer fonts-crosextra-carlito fonts-liberation fontconfig; \
+    apt-get $certicoex_apt_options install -y --no-install-recommends libreoffice-writer fonts-crosextra-carlito fonts-liberation fontconfig tesseract-ocr tesseract-ocr-spa tesseract-ocr-eng poppler-utils; \
     rm -rf /var/lib/apt/lists/*; \
     useradd --create-home --uid 10001 certicoex; \
     mkdir -p /app/data; chown certicoex:certicoex /app/data

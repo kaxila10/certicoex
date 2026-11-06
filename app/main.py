@@ -1,7 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
-from io import BytesIO, StringIO
+from io import BytesIO
 from pathlib import Path
-import csv
 import json
 import os
 import re
@@ -23,6 +22,8 @@ from .defaults import seed_templates
 from .storage import open_store, StorageUnavailable
 from .validation import review_students
 from .naming import document_name, disposition
+from .rosters import parse_text, tabular
+from .roster_files import extract_list
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = Path(os.environ.get('CERTICOEX_DATA', ROOT / '.local/data'))
@@ -285,42 +286,18 @@ def normalize(value):
     return ''.join(c for c in unicodedata.normalize('NFKD', str(value).lower()) if not unicodedata.combining(c)).strip()
 
 
-def tabular(rows):
-    rows = [list(row) for row in rows if any(str(c or '').strip() for c in row)]
-    if not rows:
-        raise ValueError('El listado está vacío.')
-    if len(rows) > 501 or max(map(len, rows)) > 40:
-        raise ValueError('Admite hasta 500 alumnos y 40 columnas por importación.')
-    aliases = {'name': ['nombre completo', 'nombre y apellidos', 'trabajador', 'alumno', 'nombre', 'nombres'], 'surname': ['apellidos', 'apellido', 'primer apellido'], 'surname2': ['segundo apellido'], 'dni': ['dni/nie', 'dni', 'nie', 'nif', 'documento', 'dni / nie']}
-    first = [normalize(c or '') for c in rows[0]]
-    mapping = {field: next((first.index(a) for a in names if a in first), -1) for field, names in aliases.items()}
-    has_header = mapping['name'] >= 0 or mapping['dni'] >= 0
-    width = max(map(len, rows))
-    headers = [str(c or f'Columna {i+1}') for i, c in enumerate(rows[0])] if has_header else [f'Columna {i+1}' for i in range(width)]
-    if not has_header:
-        mapping = {'name': 0, 'surname': -1, 'surname2': -1, 'dni': 1 if width > 1 else -1}
-    return {'headers': headers, 'rows': [[str(c).strip() if c is not None else '' for c in row] for row in rows[int(has_header):]], 'mapping': mapping}
-
-
 class Paste(BaseModel):
     text: str = Field(max_length=150_000)
 
 
 @app.post('/api/import/paste')
 def paste_list(payload: Paste):
-    text = payload.text.strip()
-    if not text:
-        raise ValueError('Pega el listado de alumnos.')
-    try:
-        dialect = csv.Sniffer().sniff(text[:4000], delimiters='\t;,')
-        rows = list(csv.reader(StringIO(text), dialect))
-    except csv.Error:
-        # Also accept "Nombre Apellidos 12345678Z" on each line.
-        rows = []
-        for line in text.splitlines():
-            match = re.match(r'^(.*?)\s+([XYZxyz\d][\d .-]{5,}[A-Za-z])\s*$', line)
-            rows.append([match[1], match[2]] if match else [line, ''])
-    return tabular(rows)
+    return parse_text(payload.text)
+
+
+@app.post('/api/import/document')
+def import_document(file: UploadFile = File(...)):
+    return extract_list(file.file.read(10_000_001), file.filename or '')
 
 
 @app.post('/api/import/excel')
